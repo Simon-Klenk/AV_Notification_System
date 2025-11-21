@@ -1,0 +1,49 @@
+# ----------------------------------------
+# General Ignored Files and Folders
+# ----------------------------------------
+# Log files, temporary files
+*.log
+*.tmp
+*~
+.DS_Store
+
+# Backup files from editors
+*.swp
+*.bak
+
+# ----------------------------------------
+# Python-specific Files (General)
+# ----------------------------------------
+# Bytecode files
+__pycache__/
+*.pyc
+
+# Virtual Environments
+venv/
+.venv/
+
+# Dependency logs
+pip-log.txt
+.Python
+
+# ----------------------------------------
+# VS Code / IDE Specific
+# ----------------------------------------
+# VS Code folder containing user preferences, history, etc.
+.vscode/
+
+# ----------------------------------------
+# MicroPython / Raspberry Pi Pico Specific
+# ----------------------------------------
+# MicroPython cache files
+.mpy_cache/
+
+# ----------------------------------------
+# Project-specific / Private Files (CRITICAL)
+# ----------------------------------------
+# Files containing local credentials or private messages:
+wifi_credentials.txt
+messages.txt
+
+# Folder used for temporary updates by the downloader script:
+/update/

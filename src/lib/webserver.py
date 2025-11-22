@@ -6,10 +6,9 @@
 # 
 # Author: Simon Klenk 2025 
 # License: MIT - See the LICENSE file in the project directory for the full license text. 
-import uasyncio as asyncio 
-import network 
-from microdot import Microdot, send_file, redirect, Response 
-import downloader 
+import uasyncio as asyncio
+import network
+from microdot import Microdot, send_file, redirect, Response
 
 app = Microdot()
 Response.default_content_type = 'application/json'
@@ -84,10 +83,13 @@ class Webserver:
         API endpoint to trigger a system update via the downloader module.
         This function is only called via POST (button click) as configured in run().
         """ 
-        # The downloader function handles the actual download process
-        downloader.download_github_repo_to_update_dir() 
-        # Redirect back to the update page or return a success message/status
-        return redirect('/?page=update') 
+        print("Start update...")
+        with open("update_flag", "w") as f:
+            f.write("1")
+        import machine
+        import time
+        time.sleep(0.5)
+        machine.reset()
 
     # --------------------------- 
     # main loop 

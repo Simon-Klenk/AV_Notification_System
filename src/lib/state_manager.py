@@ -199,7 +199,7 @@ class StateManager:
                 self._send_resolume_message(_PARAM_PATH, message_text)
                 self._send_resolume_message(_PARAM_PATH_OPACITY, opacity_on)
                 self._send_resolume_message(_PARAM_PATH_CONNECT, connect_on)
-                self._send_resolume_message(_PARAM_PATH_GROUP, 2)
+               #self._send_resolume_message(_PARAM_PATH_GROUP, 2)
                 self._current_osc_index = self._current_display_message_index
             
             async def auto_clear(index, task_id):
@@ -210,7 +210,7 @@ class StateManager:
 
                 self._send_resolume_message(_PARAM_PATH_OPACITY, 0.0)
                 self._send_resolume_message(_PARAM_PATH_CONNECT, 0)
-                self._send_resolume_message(_PARAM_PATH_GROUP, 0)
+               #self._send_resolume_message(_PARAM_PATH_GROUP, 0)
                 self.update_state(index, "show")
                 self._current_osc_index = -1
 

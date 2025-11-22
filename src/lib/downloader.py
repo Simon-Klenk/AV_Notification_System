@@ -14,7 +14,7 @@ import machine
 import ujson as json
 
 # --- Configuration ---
-# Optional: Set token if repo is private
+# Optional: Set token if repo is private or rise reate limits
 GITHUB_TOKEN = "" 
 REPO_OWNER = 'Simon-Klenk'
 REPO_NAME = 'AV_Notification_System'
@@ -72,8 +72,6 @@ def _http_request_stream(url, headers=None):
         s.connect(addr)
         
         gc.collect() 
-        
-        # SNI (Server Name Indication) is often required by GitHub
         s = ssl.wrap_socket(s, server_hostname=host)
 
         request_lines = [
@@ -205,23 +203,4 @@ def download_github_repo_to_update_dir():
             return False
 
     print(f"\nSuccess! Updated {downloaded_count} files.")
-    print("Resetting system...")
-    import time
-    time.sleep(1)
-    machine.reset()
     return True
-
-def trigger_update_process():
-    """
-    Sets the update flag and resets the device to boot into clean update mode.
-    """
-    print("Update requested. Rebooting into Update Mode...")
-    try:
-        with open("update_flag", "w") as f:
-            f.write("1")
-    except Exception as e:
-        print(f"Error writing flag: {e}")
-    
-    import time
-    time.sleep(0.5)
-    machine.reset()

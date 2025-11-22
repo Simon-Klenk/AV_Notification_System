@@ -1,0 +1,20 @@
+[
+  {"remote": "src/boot.py", "local": "boot.py"},
+  {"remote": "src/html/emergency.html", "local": "html/emergency.html"},
+  {"remote": "src/html/pickup.html", "local": "html/pickup.html"},
+  {"remote": "src/html/status.html", "local": "html/status.html"},
+  {"remote": "src/html/update.html", "local": "html/update.html"},
+  {"remote": "src/lib/async_queue.py", "local": "lib/async_queue.py"},
+  {"remote": "src/lib/connect_wifi.py", "local": "lib/connect_wifi.py"},
+  {"remote": "src/lib/display_manager.py", "local": "lib/display_manager.py"},
+  {"remote": "src/lib/downloader.py", "local": "lib/downloader.py"},
+  {"remote": "src/lib/hardware.py", "local": "lib/hardware.py"},
+  {"remote": "src/lib/microdot.py", "local": "lib/microdot.py"},
+  {"remote": "src/lib/sh1106.py", "local": "lib/sh1106.py"},
+  {"remote": "src/lib/spleen_32.py", "local": "lib/spleen_32.py"},
+  {"remote": "src/lib/state_manager.py", "local": "lib/state_manager.py"},
+  {"remote": "src/lib/time_sync.py", "local": "lib/time_sync.py"},
+  {"remote": "src/lib/webserver.py", "local": "lib/webserver.py"},
+  {"remote": "src/lib/writer.py", "local": "lib/writer.py"},
+  {"remote": "src/main.py", "local": "main.py"}
+]

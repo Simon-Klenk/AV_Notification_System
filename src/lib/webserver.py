@@ -57,6 +57,7 @@ class Webserver:
         form = request.form
         msg_content = form.get('content')
         msg_emergency = form.get('emergency_type')
+        msg_plate = form.get('plate_number')
 
         if msg_content:
             await self._event_queue.put({

@@ -4,6 +4,7 @@
   {"remote": "src/html/pickup.html", "local": "html/pickup.html"},
   {"remote": "src/html/status.html", "local": "html/status.html"},
   {"remote": "src/html/update.html", "local": "html/update.html"},
+  {"remote": "src/html/parking.html", "local": "html/parking.html"},
   {"remote": "src/lib/async_queue.py", "local": "lib/async_queue.py"},
   {"remote": "src/lib/connect_wifi.py", "local": "lib/connect_wifi.py"},
   {"remote": "src/lib/display_manager.py", "local": "lib/display_manager.py"},

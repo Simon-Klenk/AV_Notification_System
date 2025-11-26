@@ -33,7 +33,8 @@ class Webserver:
             'pickup': f'{self._base_dir}/pickup.html', 
             'status': f'{self._base_dir}/status.html', 
             'emergency': f'{self._base_dir}/emergency.html', 
-            'update': f'{self._base_dir}/update.html' 
+            'update': f'{self._base_dir}/update.html',
+            'parking': f'{self._base_dir}/parking.html'
         } 
 
     # --------------------------- 
@@ -61,6 +62,12 @@ class Webserver:
             await self._event_queue.put({
                 "type": "PICKUP",
                 "value": msg_content,
+            })
+
+        elif msg_plate:
+            await self._event_queue.put({
+                "type": "PARKING",
+                "value": msg_plate,
             })
 
         elif msg_emergency: 

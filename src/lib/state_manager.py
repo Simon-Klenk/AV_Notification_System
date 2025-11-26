@@ -157,6 +157,8 @@ class StateManager:
                     await self._handle_reject()
             elif event_type == "PICKUP":
                 await self._handle_pickup(event_value)
+            elif event_type == "PARKING":
+                await self._handle_parking(event_value)
             elif event_type == "EMERGENCY":
                 await self._handle_emergency()
 
@@ -189,6 +191,8 @@ class StateManager:
             message_text = ""
             if msg_entry['type'] == "PICKUP":
                 message_text = f"Die Eltern von: {msg_entry['value']} bitte zum Kids Check-in kommen"
+            elif msg_entry['type'] == "PARKING":
+                message_text = f"Fahrzeug bitte umparken: {msg_entry['value']}"
             elif msg_entry['type'] == "EMERGENCY":
                 message_text = "Ersthelfer / medizinisches Fachpersonal bitte zum Kids Check-In"
 
@@ -265,4 +269,21 @@ class StateManager:
             self._current_osc_index = self._current_osc_index - 1
 
         await self._display_event_queue.put({"type": "NEWTEXT", "value": "Ersthelfer zum Kids Check-In"})
+        await self._led_event_queue.put({"state": "ON"})
+    
+    async def _handle_parking(self, plate_value):
+        entry = {
+            "type": "PARKING",
+            "value": plate_value,
+            "state": "wait",
+            "timestamp": self._current_timestamp()
+        }
+        self._messages.append(entry)
+        self._current_display_message_index = len(self._messages) - 1
+        self._messages_dirty.set()
+        if self._current_osc_index != -1:
+            self._current_osc_index = self._current_osc_index - 1
+
+        message_text = f"Umparken: {plate_value}"
+        await self._display_event_queue.put({"type": "NEWTEXT", "value": message_text})
         await self._led_event_queue.put({"state": "ON"})

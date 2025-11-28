@@ -18,7 +18,6 @@ _message_file = 'messages.txt'
 _log_file = 'system.log'
 _max_log_size = 20 * 1024  # 20 KB Limit for Logs
 _backup_log_file = 'system.log.old'
-
 _RESOLUME_IP = '192.168.104.10'
 _RESOLUME_PORT = 7000
 
@@ -160,6 +159,28 @@ class StateManager:
 
     def get_all_messages(self):
         return list(self._messages)
+
+    def get_log_content(self):
+        """Reads the content of the primary and backup log files and returns them."""
+        
+        log_content = ""
+        # 1. Read current log
+        try:
+            log_content += "\n--- system.log ---\n"
+            with open(_log_file, 'r') as f:
+                log_content += f.read()
+        except OSError:
+            log_content += "\n--- system.log: Not found ---\n"
+
+        # 2. Read backup log
+        try:
+            log_content += "\n\n--- system.log.old ---\n"
+            with open(_backup_log_file, 'r') as f:
+                log_content += f.read()
+        except OSError:
+            log_content += "\n--- system.log.old: Not found ---\n"
+            
+        return log_content
 
     # ---------------------------
     # async file writer

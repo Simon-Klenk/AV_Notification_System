@@ -84,7 +84,16 @@ class Webserver:
         """API endpoint to retrieve the last 5 messages for the status page.""" 
         # Assumes state_manager.get_all_messages() returns a list of messages
         msgs = self.state_manager.get_all_messages() 
-        return {'messages': msgs[-5:]} 
+        return {'messages': msgs[-5:]}
+
+    async def show_log(self, request):
+        """API endpoint to retrieve the system log file content.""" 
+        try:
+            log_content = self.state_manager.get_log_content()
+            # Returns content as text/plain, which is better for logs
+            return log_content, 200, {'Content-Type': 'text/plain'} 
+        except Exception as e:
+            return f"Error reading log: {e}", 500, {'Content-Type': 'text/plain'}
     
     async def handle_update_trigger(self, request): 
         """
@@ -106,9 +115,10 @@ class Webserver:
         """Starts the Microdot web server after checking for WiFi connectivity.""" 
         # Route definitions
         app.route('/')(self.index) 
-        app.route('/submit', methods=['POST'])(self.handle_post) 
-        app.route('/messages')(self.show_messages) 
-        app.route('/update', methods=['POST'])(self.handle_update_trigger) 
+        app.route('/submit', methods=['POST'])(self.handle_post)
+        app.route('/messages')(self.show_messages)
+        app.route('/log')(self.show_log)
+        app.route('/update', methods=['POST'])(self.handle_update_trigger)
 
         wlan = network.WLAN(network.STA_IF) 
         if wlan.isconnected(): 

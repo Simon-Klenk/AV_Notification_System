@@ -16,6 +16,7 @@ from display_manager import DisplayManager
 import connect_wifi
 import time_sync
 from webserver import Webserver
+from async_logger import AsyncLogger
 
 async def show_ready_message(display_event_queue: AsyncQueue):
     """
@@ -33,46 +34,60 @@ async def main():
     The main asynchronous function.
     Initializes shared resources, components, and starts all application tasks.
     """
-    
-    # 1. Initialize Shared Asynchronous Queues
-    # Queues are used for inter-component communication (e.g., button press to state change).
+    logger = AsyncLogger()
+    asyncio.create_task(logger.run())
+    logger.log("Start logger.")
+
+    # Initialize Shared Asynchronous Queues
     event_queue = AsyncQueue()
     display_event_queue = AsyncQueue()
     led_event_queue = AsyncQueue()
     
-    # 2. Initialize Core Components
-    # Inject queues for decoupled communication.
+    # Initialize Core Components
     hardware = Hardware(event_queue, led_event_queue)
-    state_manager = StateManager(event_queue, display_event_queue, led_event_queue)
-    webserver = Webserver(event_queue, state_manager)
-    # The DisplayManager typically runs on the second core (Core 1) for performance.
-    display_manager = DisplayManager(display_event_queue)
+    state_manager = StateManager(event_queue, display_event_queue, led_event_queue, logger)
+    webserver = Webserver(event_queue, state_manager, logger)
+    
+    # Initialize DisplayManager with error handling
+    display_manager = None
+    task_display_manager = None
+    
+    try:
+        display_manager = DisplayManager(display_event_queue)
+        
+        # If initialization is successful, start its task
+        task_display_manager = asyncio.create_task(display_manager.run())
+        print("INFO: DisplayManager erfolgreich initialisiert und gestartet.")
+        
+    except Exception as e:
+        # If display initialization fails, log the error and continue without it
+        print("ACHTUNG: Display konnte nicht initialisiert werden. Display-Funktionalität deaktiviert.")
+        sys.print_exception(e)
 
-    # 3. Create and Start Background Tasks (Coroutines)
-    # These tasks run concurrently within the uasyncio event loop.
     task_syc_time = asyncio.create_task(time_sync.sync_time())
     task_controll_hardware = asyncio.create_task(hardware.run())
     task_manage_state = asyncio.create_task(state_manager.run())
     task_webserver = asyncio.create_task(webserver.run())
 
-    # Display manager run task (a placeholder for the Core 1 execution).
-    task_display_manager = asyncio.create_task(display_manager.run())
-    
-    # --- Start the task to show and delete the "bereit" message ---
-    task_ready_message = asyncio.create_task(show_ready_message(display_event_queue))
-    
-    # 4. Wait for All Persistent Tasks
+    if display_manager: 
+        task_ready_message = asyncio.create_task(show_ready_message(display_event_queue))
+
+    # Wait for All Persistent Tasks
+    tasks_to_gather = [
+        task_controll_hardware, 
+        task_manage_state,
+        task_webserver
+    ]
+ 
+    if task_display_manager:
+        tasks_to_gather.append(task_display_manager)
+        
     try:
-        await asyncio.gather(
-            task_controll_hardware, 
-            task_manage_state,
-            task_webserver,
-            task_display_manager
-        )
+        await asyncio.gather(*tasks_to_gather)
+        
     except Exception as e:
+        print("KRITISCHER FEHLER in einer der Haupt-Tasks:")
         sys.print_exception(e)
-    finally:
-        pass
 
 if __name__ == "__main__":
     try:

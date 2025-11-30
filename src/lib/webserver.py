@@ -9,6 +9,8 @@
 import uasyncio as asyncio
 import network
 from microdot import Microdot, send_file, redirect, Response
+from async_logger import _log_file, _backup_log_file
+import os
 
 app = Microdot()
 Response.default_content_type = 'application/json'
@@ -21,11 +23,12 @@ class Webserver:
     Implements the Microdot web server to serve static HTML pages 
     and handle API endpoints for application control.
     """
-    def __init__(self, event_queue, state_manager, base_dir="/html"): 
+    def __init__(self, event_queue, state_manager, logger, base_dir="/html"): 
         self._base_dir = base_dir 
         self._event_queue = event_queue 
         self.page_files = self._create_page_files() 
-        self.state_manager = state_manager 
+        self.state_manager = state_manager
+        self.logger = logger
 
     def _create_page_files(self): 
         """Defines the paths for the static HTML pages.""" 
@@ -33,7 +36,7 @@ class Webserver:
             'pickup': f'{self._base_dir}/pickup.html', 
             'status': f'{self._base_dir}/status.html', 
             'emergency': f'{self._base_dir}/emergency.html', 
-            'update': f'{self._base_dir}/update.html',
+            'system': f'{self._base_dir}/system.html',
             'parking': f'{self._base_dir}/parking.html'
         } 
 
@@ -73,6 +76,7 @@ class Webserver:
 
         elif msg_emergency: 
             # Assuming 'staff' is the key for triggering the EMERGENCY event
+            print("Emergency requested!")
             if msg_emergency.lower() == "staff":
                 await self._event_queue.put({
                     "type": "EMERGENCY",
@@ -87,13 +91,56 @@ class Webserver:
         return {'messages': msgs[-5:]}
 
     async def show_log(self, request):
-        """API endpoint to retrieve the system log file content.""" 
-        try:
-            log_content = self.state_manager.get_log_content()
-            # Returns content as text/plain, which is better for logs
-            return log_content, 200, {'Content-Type': 'text/plain'} 
-        except Exception as e:
-            return f"Error reading log: {e}", 500, {'Content-Type': 'text/plain'}
+            """
+            API endpoint to retrieve the system log file content by streaming 
+            data to avoid MemoryError on constrained devices.
+            
+            Uses a generator function (log_streamer) to yield content line-by-line.
+            """
+            
+            async def log_streamer():
+                """Generator that yields log content in small chunks."""
+                
+                # 1. Stream current log (system.log)
+                # Send the header first
+                yield "\n--- system.log ---\n".encode('utf-8')
+                
+                try:
+                    # Open the file and stream line by line
+                    with open(_log_file, 'r') as f:
+                        while True:
+                            # Use readline to read only one line at a time into RAM
+                            line = f.readline() 
+                            if not line:
+                                break
+                            # Yield the line (must be bytes for HTTP response body)
+                            yield line.encode('utf-8')
+                except OSError:
+                    yield "\n--- system.log: Not found ---\n".encode('utf-8')
+
+                # 2. Stream backup log (system.log.old)
+                # Send the header for the backup log
+                yield "\n\n--- system.log.old ---\n".encode('utf-8')
+                
+                try:
+                    # Open and stream the backup file
+                    with open(_backup_log_file, 'r') as f:
+                        while True:
+                            line = f.readline()
+                            if not line:
+                                break
+                            yield line.encode('utf-8')
+                except OSError:
+                    yield "\n--- system.log.old: Not found ---\n".encode('utf-8')
+
+            # Return a Response object, passing the generator as the body.
+            # Microdot/MicroPython will execute the generator and send chunks 
+            # to the client sequentially, keeping RAM usage low.
+            return Response(
+                body=log_streamer(), 
+                status_code=200, 
+                headers={'Content-Type': 'text/plain'}
+            )
     
     async def handle_update_trigger(self, request): 
         """
@@ -118,7 +165,7 @@ class Webserver:
         app.route('/submit', methods=['POST'])(self.handle_post)
         app.route('/messages')(self.show_messages)
         app.route('/log')(self.show_log)
-        app.route('/update', methods=['POST'])(self.handle_update_trigger)
+        app.route('/system', methods=['POST'])(self.handle_update_trigger)
 
         wlan = network.WLAN(network.STA_IF) 
         if wlan.isconnected(): 

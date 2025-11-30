@@ -27,67 +27,12 @@ _PARAM_PATH_CONNECT = "/composition/layers/6/clips/1/connect"
 _PARAM_PATH_GROUP = "/composition/groups/4/video/opacity/behaviour/playdirection"
 
 # ---------------------------
-# ASYNC LOGGER CLASS
-# ---------------------------
-class AsyncLogger:
-    def __init__(self, filename=_log_file, interval_ms=5000):
-        self.filename = filename
-        self.interval_ms = interval_ms
-        self.buffer = []
-        self.rtc = RTC()
-        self._lock = asyncio.Lock()
-        
-    def _get_timestamp(self):
-        t = self.rtc.datetime()
-        # Format: DD.MM.YYYY HH:MM:SS
-        return "{:02d}.{:02d}.{:04d} {:02d}:{:02d}:{:02d}".format(t[2], t[1], t[0], t[4], t[5], t[6])
-
-    def log(self, message):
-        """Adds message to the buffer (non-blocking)"""
-        ts = self._get_timestamp()
-        entry = f"[{ts}] {message}"
-        self.buffer.append(entry)
-        print(entry) 
-
-    async def _check_rotation(self):
-        """Checks file size and performs single-backup rotation"""
-        try:
-            stat = os.stat(self.filename)
-            if stat[6] > _max_log_size:
-                # Move current log to *.old. This overwrites the previous backup.
-                try:
-                    os.rename(self.filename, _backup_log_file)
-                    self.log(f"Log rotated (Limit {_max_log_size}B reached). Current log is now {_backup_log_file}.")
-                except Exception as e:
-                    self.log(f"Error during rotation: {e}")
-        except OSError:
-            # File does not exist yet
-            pass
-
-    async def run(self):
-        """Background task for writing to flash"""
-        while True:
-            await asyncio.sleep_ms(self.interval_ms)
-            if self.buffer:
-                async with self._lock:
-                    current_chunk = self.buffer[:]
-                    self.buffer = []
-                
-                try:
-                    await self._check_rotation()
-                    with open(self.filename, "a") as f:
-                        for line in current_chunk:
-                            f.write(line + "\n")
-                except Exception as e:
-                    self.log(f"Logger write error: {e}")
-
-# ---------------------------
 # STATE MANAGER
 # ---------------------------
 
 class StateManager:
 
-    def __init__(self, event_queue, display_event_queue, led_event_queue):
+    def __init__(self, event_queue, display_event_queue, led_event_queue, logger):
         self._event_queue = event_queue
         self._display_event_queue = display_event_queue
         self._led_event_queue = led_event_queue
@@ -96,9 +41,7 @@ class StateManager:
         self._current_osc_index = -1
         self._messages_dirty = asyncio.Event()
         self.rtc = RTC()
-
-        # Initialize Logger
-        self.logger = AsyncLogger()
+        self.logger = logger
 
         self._max_messages = 5
         self._messages = []
@@ -286,8 +229,6 @@ class StateManager:
     # ---------------------------
 
     async def _handle_accept(self):
-        self.logger.log("Handling ACCEPT: Message accepted and sent to Resolume.")
-        
         if self._current_osc_index != -1:
             self.update_state(self._current_osc_index, "show")
         if self._current_display_message_index != -1:

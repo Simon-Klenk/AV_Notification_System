@@ -7,6 +7,7 @@
 #
 # Author: Simon Klenk 2025
 # License: MIT - See the LICENSE file in the project directory for the full license text.
+#
 from machine import Pin, I2C
 import uasyncio as asyncio
 import sh1106

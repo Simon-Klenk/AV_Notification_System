@@ -11,10 +11,12 @@ import uasyncio as asyncio
 from machine import RTC
 import os
 import sys 
+import io
+import gc
 
 # --- File Configuration Constants ---
 _log_file = 'system.log'
-_max_log_size = 20 * 1024  # 20 KB Limit for Logs on resource-constrained devices
+_max_log_size = 25 * 1024
 _backup_log_file = 'system.log.old'
 
 # ---------------------------
@@ -25,67 +27,109 @@ class AsyncLogger:
     An asynchronous logger that buffers messages and writes them to persistent 
     storage periodically in a non-blocking manner.
     """
-    def __init__(self, filename=_log_file, interval_ms=5000):
+    def __init__(self, filename=_log_file, interval_ms=500):
         self.filename = filename
         self.interval_ms = interval_ms
-        self.buffer = [] # In-memory list to store pending log entries
-        self.rtc = RTC() # Real-Time Clock for accurate timestamps
-        self._lock = asyncio.Lock() # Lock to protect the buffer during concurrent access
-        
+        self.buffer = []
+        self.rtc = RTC()
+        self._lock = asyncio.Lock()
+        self._current_size = 0
+
+        try:
+            self._current_size = os.stat(self.filename)[6]
+        except OSError:
+            self._current_size = 0
+
     def _get_timestamp(self):
         """Retrieves and formats the current timestamp from the RTC."""
         t = self.rtc.datetime()
-        # Format: DD.MM.YYYY HH:MM:SS
-        return "{:02d}.{:02d}.{:04d} {:02d}:{:02d}:{:02d}".format(t[2], t[1], t[0], t[4], t[5], t[6])
+        return "%02d.%02d.%04d %02d:%02d:%02d" % (t[2], t[1], t[0], t[4], t[5], t[6])
 
-    def log(self, message):
+    def log(self, message, *args):
         """
-        Adds a message to the internal buffer. This operation is non-blocking.
-        The message is also immediately printed to the console/REPL for real-time debugging.
+        Adds message to buffer and prints to console.
+        Accepts optional *args for %-style formatting.
         """
         ts = self._get_timestamp()
-        entry = f"[{ts}] {message}"
-        self.buffer.append(entry)
-        print(entry) 
+        
+        if args:
+            try:
+                message = message % args
+            except TypeError:
+                message = str(message) + str(args)
 
-    def log_exception(self, context, exception):
-        """
-        Logs a detailed exception including context and traceback, ensuring
-        critical errors are captured persistently.
-        """
+        entry = "[%s] %s\n" % (ts, message)
+        
+        self.buffer.append(entry)
+        print(entry.strip())
+
+    def log_exception(self, context, exception, *args):
+        """Safely logs exceptions and captures the traceback."""
+        self.log("!!! EXCEPTION in %s: %s", context, exception)
+        
+        sys.print_exception(exception)
+        
         try:
-            # Capture the traceback string
-            import io
             s = io.StringIO()
             sys.print_exception(exception, s)
-            traceback_str = s.getvalue().strip()
+            s.seek(0)
             
-            self.log(f"EXCEPTION in {context}: {exception}")
-            for line in traceback_str.split('\n'):
-                self.log(f"TRACE: {line.strip()}")
-        except Exception as e:
-            # Fallback in case logging the original exception fails
-            self.log(f"WARNING: Failed to log exception in {context}: {e}")
+            line = s.readline()
+            while line:
+                if line.strip():
+                    self.buffer.append("| %s" % line)
+                line = s.readline()
+                
+            del s
+            gc.collect()
 
-    async def _check_rotation(self):
-        """
-        Checks the primary log file size and performs a single-backup rotation 
-        if the size limit is exceeded.
-        """
+        except Exception:
+            print("CRITICAL: Failed to log exception trace.")
+
+    async def _rotate_if_needed(self):
+        """Checks if the log file size exceeds the limit and performs rotation."""
+        if self._current_size < _max_log_size:
+            return
+
         try:
-            stat = os.stat(self.filename)
-            if stat[6] > _max_log_size:
-                # Atomically rotate: delete old backup, rename current to backup.
-                try:
-                    if _backup_log_file in os.listdir():
-                        os.remove(_backup_log_file)
-                    os.rename(self.filename, _backup_log_file)
-                    self.log(f"Log rotated (Limit {_max_log_size}B reached). Current log is now {_backup_log_file}.")
-                except Exception as e:
-                    self.log(f"Error during rotation: {e}")
-        except OSError:
-            # File does not exist yet; safe to ignore
-            pass
+            self.log("--- ROTATING LOGS ---")
+            await self.flush()
+            
+            if _backup_log_file in os.listdir():
+                os.remove(_backup_log_file)
+            
+            os.rename(self.filename, _backup_log_file)
+            self._current_size = 0
+            self.log("--- LOG ROTATED ---")
+        except Exception as e:
+            print("Rotation failed: %s" % e)
+
+    async def flush(self):
+        """
+        Manually writes the buffered messages to the disk. 
+        This method is thread-safe and non-blocking, but the I/O itself is synchronous.
+        """
+        if not self.buffer:
+            return
+
+        async with self._lock:
+            old_buffer = self.buffer
+            self.buffer = []
+
+        if not old_buffer:
+            return
+
+        try:
+            with open(self.filename, "a") as f:
+                for line in old_buffer:
+                    f.write(line)
+                    self._current_size += len(line)
+            
+            del old_buffer 
+            gc.collect()
+            
+        except Exception as e:
+            print("CRITICAL LOGGER WRITE ERROR: %s" % e)
 
     async def run(self):
         """
@@ -93,25 +137,8 @@ class AsyncLogger:
         to the flash storage in a safe, non-blocking manner.
         """
         while True:
-            # Wait for the specified interval
             await asyncio.sleep_ms(self.interval_ms)
             
-            if self.buffer:
-                # Use lock to safely swap the buffer and prevent race conditions 
-                # if log() is called concurrently.
-                async with self._lock:
-                    current_chunk = self.buffer[:]
-                    self.buffer = []
-                
-                try:
-                    # Check and perform rotation before writing
-                    await self._check_rotation()
-                    
-                    # Blocking I/O operation (writing to flash), but minimized 
-                    # in frequency by the interval and buffer chunking.
-                    with open(self.filename, "a") as f:
-                        for line in current_chunk:
-                            f.write(line + "\n")
-                except Exception as e:
-                    # Critical error: Failed to write to flash. Log to console only.
-                    print(f"CRITICAL LOGGER WRITE ERROR: {e}")
+            await self._rotate_if_needed()
+            
+            await self.flush()

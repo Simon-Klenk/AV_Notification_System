@@ -17,5 +17,6 @@
   {"remote": "src/lib/time_sync.py", "local": "lib/time_sync.py"},
   {"remote": "src/lib/webserver.py", "local": "lib/webserver.py"},
   {"remote": "src/lib/writer.py", "local": "lib/writer.py"},
+  {"remote": "src/lib/async_logger.py", "local": "lib/async_logger.py"},
   {"remote": "src/main.py", "local": "main.py"}
 ]

@@ -39,7 +39,7 @@ def is_summer_time(year, month, day, hour):
     else:
         return False
 
-async def sync_time():
+async def sync_time(logger):
     """
     Synchronizes the RTC time using NTP and applies the German local time offset,
     including automatic daylight saving time adjustment.
@@ -47,21 +47,24 @@ async def sync_time():
     rtc = RTC()
 
     try:
-        print("⏱️ Synchronizing time via NTP...")
-        ntptime.settime()  # Set UTC time
+        logger.log("Synchronizing time via NTP...")
+        ntptime.settime()
         year, month, day, weekday, hour, minute, second, ms = rtc.datetime()
 
-        # Determine timezone offset based on DST
         if is_summer_time(year, month, day, hour):
-            tz_offset = 2  # CEST
+            tz_offset = 2
+            tz_name = "CEST"
         else:
-            tz_offset = 1  # CET
+            tz_offset = 1
+            tz_name = "CET"
 
-        # Adjust hour with wrap-around at midnight
         local_hour = (hour + tz_offset) % 24
 
         rtc.datetime((year, month, day, weekday, local_hour, minute, second, ms))
-        print(f"✅ Local German time set (UTC+{tz_offset}): {rtc.datetime()}")
+        
+        t = rtc.datetime()
+        local_time_str = f"({t[0]}, {t[1]}, {t[2]}, {t[3]}, {t[4]}, {t[5]}, {t[6]}, {t[7]})"
+        logger.log(f"Local German time set ({tz_name} / UTC+{tz_offset}): {local_time_str}")
 
     except Exception as e:
-        print(f"⚠️ Failed to set NTP time: {e}")
+        logger.log_exception("sync_time (NTP)", e)

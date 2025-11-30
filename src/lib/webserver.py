@@ -28,7 +28,8 @@ class Webserver:
         self._event_queue = event_queue 
         self.page_files = self._create_page_files() 
         self.state_manager = state_manager
-        self.logger = logger
+        self.logger = logger # Store the logger instance
+        self.logger.log("Webserver initialized.")
 
     def _create_page_files(self): 
         """Defines the paths for the static HTML pages.""" 
@@ -50,9 +51,14 @@ class Webserver:
         """ 
         page = request.args.get('page', 'pickup') 
         file = self.page_files.get(page, self.page_files['pickup']) 
+        
+        self.logger.log(f"Serving page: {page} ({file})")
+
         try: 
             return send_file(file, max_age=0) 
-        except Exception: 
+        except Exception as e:
+            # Log the exception if the file serving fails
+            self.logger.log_exception("Webserver.index", e)
             return "404 - File not found", 404 
 
     async def handle_post(self, request): 
@@ -63,12 +69,14 @@ class Webserver:
         msg_plate = form.get('plate_number')
 
         if msg_content:
+            self.logger.log(f"Received PICKUP request: {msg_content}")
             await self._event_queue.put({
                 "type": "PICKUP",
                 "value": msg_content,
             })
 
         elif msg_plate:
+            self.logger.log(f"Received PARKING request: {msg_plate}")
             await self._event_queue.put({
                 "type": "PARKING",
                 "value": msg_plate,
@@ -76,11 +84,15 @@ class Webserver:
 
         elif msg_emergency: 
             # Assuming 'staff' is the key for triggering the EMERGENCY event
-            print("Emergency requested!")
             if msg_emergency.lower() == "staff":
+                self.logger.log("Received EMERGENCY request (Staff Assist)")
                 await self._event_queue.put({
                     "type": "EMERGENCY",
                 })
+            else:
+                self.logger.log(f"Received unknown EMERGENCY type: {msg_emergency}")
+        
+        self.logger.log(f"Redirecting after POST to /?page=status")
         # Redirect back to the status page after submission
         return redirect('/?page=status') 
 
@@ -88,6 +100,7 @@ class Webserver:
         """API endpoint to retrieve the last 5 messages for the status page.""" 
         # Assumes state_manager.get_all_messages() returns a list of messages
         msgs = self.state_manager.get_all_messages() 
+        self.logger.log(f"API: Serving {len(msgs[-5:])} messages.")
         return {'messages': msgs[-5:]}
 
     async def show_log(self, request):
@@ -97,6 +110,7 @@ class Webserver:
             
             Uses a generator function (log_streamer) to yield content line-by-line.
             """
+            self.logger.log("API: Streaming system logs.")
             
             async def log_streamer():
                 """Generator that yields log content in small chunks."""
@@ -115,8 +129,12 @@ class Webserver:
                                 break
                             # Yield the line (must be bytes for HTTP response body)
                             yield line.encode('utf-8')
-                except OSError:
+                except OSError as e:
+                    self.logger.log(f"Log file not found or read error: {_log_file}")
                     yield "\n--- system.log: Not found ---\n".encode('utf-8')
+                except Exception as e:
+                    self.logger.log_exception("show_log (system.log)", e)
+                    yield "\n--- system.log: CRITICAL READ ERROR ---\n".encode('utf-8')
 
                 # 2. Stream backup log (system.log.old)
                 # Send the header for the backup log
@@ -130,8 +148,13 @@ class Webserver:
                             if not line:
                                 break
                             yield line.encode('utf-8')
-                except OSError:
+                except OSError as e:
+                    self.logger.log(f"Backup log file not found or read error: {_backup_log_file}")
                     yield "\n--- system.log.old: Not found ---\n".encode('utf-8')
+                except Exception as e:
+                    self.logger.log_exception("show_log (system.log.old)", e)
+                    yield "\n--- system.log.old: CRITICAL READ ERROR ---\n".encode('utf-8')
+
 
             # Return a Response object, passing the generator as the body.
             # Microdot/MicroPython will execute the generator and send chunks 
@@ -147,9 +170,15 @@ class Webserver:
         API endpoint to trigger a system update via the downloader module.
         This function is only called via POST (button click) as configured in run().
         """ 
-        print("Start update...")
-        with open("update_flag", "w") as f:
-            f.write("1")
+        self.logger.log("System update triggered. Writing flag and resetting.")
+        
+        # Write the update flag before the reset
+        try:
+            with open("update_flag", "w") as f:
+                f.write("1")
+        except Exception as e:
+            self.logger.log_exception("handle_update_trigger", e)
+            
         import machine
         import time
         time.sleep(0.5)
@@ -170,8 +199,8 @@ class Webserver:
         wlan = network.WLAN(network.STA_IF) 
         if wlan.isconnected(): 
             ip = wlan.ifconfig()[0] 
-            print(f"📡 Webserver running at http://{ip}") 
+            self.logger.log(f"📡 Webserver starting at http://{ip}")
             # Start the server to listen on port 80
             await app.start_server(port=80, debug=False) 
         else: 
-            print("⚠️ WiFi not connected - Webserver not started.")
+            self.logger.log("⚠️ WiFi not connected - Webserver not started.")

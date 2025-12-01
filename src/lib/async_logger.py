@@ -27,7 +27,7 @@ class AsyncLogger:
     An asynchronous logger that buffers messages and writes them to persistent 
     storage periodically in a non-blocking manner.
     """
-    def __init__(self, filename=_log_file, interval_ms=500):
+    def __init__(self, filename=_log_file, interval_ms=5000):
         self.filename = filename
         self.interval_ms = interval_ms
         self.buffer = []

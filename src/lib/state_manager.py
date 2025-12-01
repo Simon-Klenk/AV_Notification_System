@@ -239,6 +239,7 @@ class StateManager:
     # ---------------------------
 
     async def _handle_accept(self):
+        self.logger.log("Pressed accept")
         if self._current_osc_index != -1:
             self.update_state(self._current_osc_index, "show")
         

@@ -10,7 +10,6 @@
 #
 import gc
 import os
-import machine
 import ujson as json
 
 # --- Configuration ---

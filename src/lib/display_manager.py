@@ -51,7 +51,6 @@ class DisplayManager:
         self._core1_power_on = False 
 
         try:
-            self.logger.log("Attempting I2C initialization for display.")
             self.i2c = I2C(0, scl=Pin(SCL_PIN), sda=Pin(SDA_PIN), freq=400000)
 
             devices = self.i2c.scan()
@@ -69,8 +68,6 @@ class DisplayManager:
             self.writer = writer.Writer(self.display, self.font)
             self.writer.wrap = False
             self.writer.col_clip = True 
-            
-            self.logger.log("DisplayManager initialized successfully.")
 
         except Exception as e:
             self.logger.log(f"Failed to initialize display: {e}")

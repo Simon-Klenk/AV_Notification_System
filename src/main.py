@@ -32,7 +32,6 @@ async def main(logger):
     Initializes shared resources, components, and starts all application tasks.
     """
     asyncio.create_task(logger.run())
-    logger.log("Starting logger.")
     gc.collect()
 
     # Initialize queues for inter-task communication
@@ -103,7 +102,6 @@ if __name__ == "__main__":
         logger_ref = AsyncLogger(interval_ms=500)
         gc.collect()
         
-        logger_ref.log("Connecting to WiFi...")
         connect_wifi.connect_wifi()
         
         # Start the main application

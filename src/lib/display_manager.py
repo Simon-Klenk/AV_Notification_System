@@ -7,6 +7,7 @@
 #
 # Author: Simon Klenk 2025
 # License: MIT - See the LICENSE file in the project directory for the full license text.
+#
 from machine import Pin, I2C
 import uasyncio as asyncio
 import sh1106
@@ -32,8 +33,9 @@ class DisplayInitializationError(Exception):
     pass
 
 class DisplayManager:
-    def __init__(self, display_event_queue):
+    def __init__(self, display_event_queue, logger):
         self._display_event_queue = display_event_queue 
+        self.logger = logger 
         
         self._current_text = ""
         self.display = None
@@ -53,9 +55,8 @@ class DisplayManager:
 
             devices = self.i2c.scan()
             if not devices or I2C_ADDR not in devices:
-                raise DisplayInitializationError(
-                    f"I2C-Adresse {hex(I2C_ADDR)} nicht gefunden. Gefunden: {[hex(d) for d in devices]}"
-                )
+                self.logger.log(f"I2C scan failed: {len(devices)} devices found. Expected: {hex(I2C_ADDR)}. Found: {[hex(d) for d in devices]}")
+                return
 
             self.display = sh1106.SH1106_I2C(
                 DISPLAY_WIDTH, DISPLAY_HEIGHT, self.i2c, addr=I2C_ADDR, rotate=180
@@ -69,7 +70,7 @@ class DisplayManager:
             self.writer.col_clip = True 
 
         except Exception as e:
-            raise DisplayInitializationError(f"Error initializing the display: {e}")
+            self.logger.log(f"Failed to initialize display: {e}")
 
     # ---------------------------
     # text sanitization
@@ -100,6 +101,9 @@ class DisplayManager:
     # ---------------------------
     def _update_text_and_power(self, new_text, power_on):
         """Safely updates text and power state for Core 1. Starts thread if necessary."""
+        if self.display is None:
+            return
+
         sanitized_text = self._sanitize_text(new_text)
 
         with self._core1_lock:
@@ -107,24 +111,30 @@ class DisplayManager:
             self._core1_power_on = power_on
 
         if not self._core1_running:
+            self.logger.log("Starting Core 1 scroll thread.")
             _thread.start_new_thread(self._core1_scroll_thread, ())
 
     async def handle_event(self, event):
         """Processes NEWTEXT and DELETETEXT events."""
         event_type = event.get("type")
+        event_value = event.get("value", "")
         
+        self.logger.log(f"Display event received: {event_type} - '{event_value[:20]}...'")
+
         if event_type == "NEWTEXT":
-            text = event.get("value", "")
+            text = event_value
             if text != self._current_text:
                 self._current_text = text
+                self.logger.log(f"Display text updated: '{text}'")
                 self._update_text_and_power(text, True)
                 
         elif event_type == "DELETETEXT":
+            self.logger.log("Display text cleared.")
             self._update_text_and_power("", False) 
             self._current_text = ""
             
         else:
-            pass 
+            self.logger.log(f"Warning: Unknown display event type: {event_type}")
 
     # ---------------------------
     # calculate dimensions
@@ -133,7 +143,12 @@ class DisplayManager:
         """Calculates text dimensions using the Writer."""
         
         y_start = (DISPLAY_HEIGHT - self.font.height()) // 2
-        text_width = self.writer.stringlen(text)
+        
+        try:
+            text_width = self.writer.stringlen(text)
+        except Exception as e:
+            self.logger.log_exception("_calculate_dims", e)
+            text_width = DISPLAY_WIDTH # Fallback to prevent crash
 
         if text_width <= DISPLAY_WIDTH:
             x_start = (DISPLAY_WIDTH - text_width) // 2
@@ -156,43 +171,58 @@ class DisplayManager:
         current_x = 0.0
         last_frame_time = utime.ticks_ms()
 
-        while self._core1_running:
+        try:
+            while self._core1_running:
 
-            with self._core1_lock:
-                new_text = self._core1_text
-                is_power_on = self._core1_power_on 
+                with self._core1_lock:
+                    new_text = self._core1_text
+                    is_power_on = self._core1_power_on 
 
-            if not is_power_on:
-                self.display.poweroff()
-                if _text != "":
-                    _text = ""
-                
-                utime.sleep_ms(500) 
-                continue
-            
-            self.display.poweron() 
-
-            if new_text != _text:
-                _text = new_text
-                text_width, y_start, x_start, x_end = self._calculate_dims(_text)
-                current_x = float(x_start)
-                
-                if x_start == x_end:
-                    self._render_text(_text, y_start, int(current_x))
+                if not is_power_on:
+                    if _text != "":
+                        self.display.poweroff()
+                        self.display.fill(0)
+                        self.display.show()
+                        self.logger.log("Core 1: Display powered off.")
+                        _text = ""
+                    
+                    utime.sleep_ms(500) 
                     continue
+                
+                self.display.poweron() 
 
-            if x_start != x_end:
-                now = utime.ticks_ms()
-                if utime.ticks_diff(now, last_frame_time) >= SCROLL_DELAY_MS:
-                    self._render_text(_text, y_start, int(current_x))
-                    current_x -= SCROLL_SPEED
+                if new_text != _text:
+                    _text = new_text
+                    text_width, y_start, x_start, x_end = self._calculate_dims(_text)
+                    current_x = float(x_start)
+                    self.logger.log(f"Core 1: New text set. Width={text_width}, Scroll needed={x_start != x_end}")
                     
-                    if current_x <= x_end:
-                        current_x = x_start
-                    
-                    last_frame_time = now
-            else:
-                utime.sleep_ms(200)
+                    if x_start == x_end:
+                        self._render_text(_text, y_start, int(current_x))
+                        utime.sleep_ms(200) # Short wait before checking for new text
+                        continue
+
+                if x_start != x_end:
+                    now = utime.ticks_ms()
+                    if utime.ticks_diff(now, last_frame_time) >= SCROLL_DELAY_MS:
+                        self._render_text(_text, y_start, int(current_x))
+                        current_x -= SCROLL_SPEED
+                        
+                        if current_x <= x_end:
+                            current_x = x_start
+                        
+                        last_frame_time = now
+                else:
+                    utime.sleep_ms(200)
+
+        except Exception as e:
+            # Critical error in the dedicated core thread
+            self.logger.log_exception("_core1_scroll_thread CRITICAL EXIT", e)
+            self._core1_running = False # Stop the thread loop
+            try:
+                self.display.poweroff()
+            except:
+                pass # Ignore error during shutdown
 
     # ---------------------------
     # render text
@@ -200,24 +230,30 @@ class DisplayManager:
     def _render_text(self, text, y_start, x_start):
         """Render function that runs on Core 1 and draws text with the Writer."""
         
-        devid = id(self.display)
-        if devid in writer.Writer.state:
-            state = writer.Writer.state[devid]
-            state.text_row = y_start
-            state.text_col = x_start
+        try:
+            devid = id(self.display)
+            if devid in writer.Writer.state:
+                state = writer.Writer.state[devid]
+                state.text_row = y_start
+                state.text_col = x_start
 
-        self.display.fill_rect(0, y_start, DISPLAY_WIDTH, self.font.height(), 0)
+            self.display.fill_rect(0, y_start, DISPLAY_WIDTH, self.font.height(), 0)
 
-        self.writer.printstring(text)
+            self.writer.printstring(text)
 
-        with self._core1_lock:
-            self.display.show()
+            with self._core1_lock:
+                self.display.show()
+        except Exception as e:
+            # Log render errors, but try to keep the core loop running if possible
+            self.logger.log_exception("_render_text", e)
+
 
     # ---------------------------
     # run function
     # ---------------------------
     async def run(self):
         """Asynchronous task that processes events and controls the display."""
+        self.logger.log("DisplayManager run loop started.")
         while True:
             event = await self._display_event_queue.get()
             await self.handle_event(event)

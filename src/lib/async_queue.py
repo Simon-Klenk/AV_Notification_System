@@ -8,7 +8,6 @@
 # License: MIT - See the LICENSE file in the project directory for the full license text.
 import uasyncio as asyncio
 from collections import deque
-import sys
 
 class AsyncQueue:
     """
@@ -30,12 +29,10 @@ class AsyncQueue:
         self._maxsize = maxsize
         
         # Determine the internal maxlen for the collections.deque.
-        # This is important for MicroPython where a truly unbounded deque might be problematic.
         if maxsize > 0:
             deque_internal_maxlen = maxsize
         elif maxsize == 0:
             deque_internal_maxlen = 20
-            # Warning: Removed print statement. Logic remains, but warning is silenced.
 
         self._queue = deque((), deque_internal_maxlen) 
         
@@ -51,11 +48,11 @@ class AsyncQueue:
         """
         # If maxsize is greater than 0 and the queue is full, wait for space.
         while self._maxsize > 0 and len(self._queue) >= self._maxsize:
-            self._put_event.clear() # Clear the event to wait for space
-            await self._put_event.wait() # Wait until an item is removed
+            self._put_event.clear()
+            await self._put_event.wait()
         
-        self._queue.append(item) # Add the item to the deque
-        self._get_event.set() # Signal that an item is available for 'get'
+        self._queue.append(item)
+        self._get_event.set()
 
     async def get(self):
         """
@@ -65,11 +62,11 @@ class AsyncQueue:
         """
         # If the queue is empty, wait for an item to be put.
         while not self._queue:
-            self._get_event.clear() # Clear the event to wait for an item
-            await self._get_event.wait() # Wait until an item is available
+            self._get_event.clear()
+            await self._get_event.wait()
         
-        item = self._queue.popleft() # Remove the oldest item from the deque
-        self._put_event.set() # Signal that space is available for 'put'
+        item = self._queue.popleft()
+        self._put_event.set()
         return item
 
     def qsize(self):

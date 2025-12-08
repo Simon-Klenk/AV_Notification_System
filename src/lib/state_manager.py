@@ -28,7 +28,6 @@ class StateManager:
     _PARAM_PATH_OPACITY = "/composition/layers/6/video/opacity"
     _PARAM_PATH = "/composition/layers/6/clips/1/video/effects/textblock/effect/text/params/lines"
     _PARAM_PATH_CONNECT = "/composition/layers/6/clips/1/connect"
-    _PARAM_PATH_GROUP = "/composition/groups/4/video/opacity/behaviour/playdirection"
 
     def __init__(self, event_queue, display_event_queue, led_event_queue, logger):
         self._event_queue = event_queue
@@ -211,7 +210,6 @@ class StateManager:
         
         self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0)
         self._send_resolume_message(self._PARAM_PATH_CONNECT, 0)
-       #self._send_resolume_message(self._PARAM_PATH_GROUP, 0)
         
         if index != -1 and self._current_osc_index == index:
             self.update_state(index, "show")
@@ -252,9 +250,9 @@ class StateManager:
 
             message_text = ""
             if msg_entry['type'] == "PICKUP":
-                message_text = "Die Eltern von: %s bitte zum Kids Check-in kommen" % msg_entry['value']
+                message_text = "Die Eltern von %s bitte zum Kids Check-in kommen" % msg_entry['value']
             elif msg_entry['type'] == "PARKING":
-                message_text = "Fahrzeug bitte umparken: %s" % msg_entry['value']
+                message_text = "Fahrzeug bitte umparken:\n%s" % msg_entry['value']
             elif msg_entry['type'] == "EMERGENCY":
                 message_text = "Ersthelfer / medizinisches Fachpersonal bitte zum Kids Check-In"
 
@@ -269,7 +267,6 @@ class StateManager:
                 self._send_resolume_message(self._PARAM_PATH, message_text)
                 self._send_resolume_message(self._PARAM_PATH_OPACITY, opacity_on)
                 self._send_resolume_message(self._PARAM_PATH_CONNECT, connect_on)
-               #self._send_resolume_message(self._PARAM_PATH_GROUP, 2)
                 self._current_osc_index = self._current_display_message_index
             
             self._active_resolume_task_id += 1
@@ -342,7 +339,7 @@ class StateManager:
 
         self.logger.log("New message added: Type=EMERGENCY, Index=%d", self._current_display_message_index)
 
-        await self._display_event_queue.put({"type": "NEWTEXT", "value": "Ersthelfer zum Kids Check-In"})
+        await self._display_event_queue.put({"type": "NEWTEXT", "value": "Ersthelfer zum Check-In"})
         await self._led_event_queue.put({"state": "ON"})
     
     async def _handle_parking(self, plate_value):

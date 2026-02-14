@@ -258,14 +258,12 @@ class StateManager:
 
             if message_text:
                 opacity_on = 1.0
-                connect_on = int(opacity_on)
+                connect_on = int(opacity_on)                
 
-                self.logger.log("OSC Sending: Text='%s' (Path: %s)", message_text, self._PARAM_PATH)
-                self.logger.log("OSC Sending: Opacity ON (%f) (Path: %s)", opacity_on, self._PARAM_PATH_OPACITY)
-                self.logger.log("OSC Sending: Connect ON (%d) (Path: %s)", connect_on, self._PARAM_PATH_CONNECT)
-                
                 self._send_resolume_message(self._PARAM_PATH, message_text)
+                await asyncio.sleep_ms(50)
                 self._send_resolume_message(self._PARAM_PATH_OPACITY, opacity_on)
+                await asyncio.sleep_ms(50)
                 self._send_resolume_message(self._PARAM_PATH_CONNECT, connect_on)
                 self._current_osc_index = self._current_display_message_index
             

@@ -14,6 +14,7 @@ import os
 import usocket as socket
 import struct
 import gc
+import time
 
 _message_file = 'messages.txt'
 _RESOLUME_IP = '192.168.104.10'
@@ -44,8 +45,15 @@ class StateManager:
         self._messages = []
         self._active_resolume_task_id = 0
 
+        # Send socket
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._resolume_addr = (_RESOLUME_IP, _RESOLUME_PORT)
+
+        # Recive socket
+        self._recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._recv_sock.bind(('0.0.0.0', 7001))
+        self._recv_sock.setblocking(False)
 
         self._ensure_message_file()
         self._load_messages_from_file()
@@ -146,7 +154,8 @@ class StateManager:
             raise ValueError("Unsupported OSC argument type: %s" % type(arg))
         return msg
 
-    def _send_resolume_message(self, path: str, value):
+    # --- ÜBERARBEITET: Asynchron + Retry Logic ---
+    async def _send_resolume_message(self, path: str, value):
         try:
             if path == self._PARAM_PATH_OPACITY:
                 value = float(value)
@@ -154,12 +163,52 @@ class StateManager:
                 value = int(value)
                 
             msg = self._osc_build_message(path, value)
-            self._sock.sendto(msg, self._resolume_addr)
-            self.logger.log("OSC sent: %s -> %s", path, value)
         except ValueError as ve:
             self.logger.log("OSC encoding error: %s", ve)
+            return False
         except Exception as e:
-            self.logger.log_exception("_send_resolume_message", e)
+            self.logger.log_exception("_send_resolume_message Encoding", e)
+            return False
+
+        max_retries = 3
+        timeout_ms = 500
+
+        for attempt in range(max_retries):
+            while True:
+                try:
+                    self._recv_sock.recv(1024)
+                except OSError:
+                    break
+
+            # send
+            try:
+                self._sock.sendto(msg, self._resolume_addr)
+                self.logger.log("OSC gesendet (Versuch %d/3): %s -> %s", attempt + 1, path, value)
+            except Exception as e:
+                self.logger.log_exception("_send_resolume_message Senden", e)
+
+            # wait for ACK
+            start_time = time.ticks_ms()
+            ack_received = False
+            
+            while time.ticks_diff(time.ticks_ms(), start_time) < timeout_ms:
+                try:
+                    data, addr = self._recv_sock.recvfrom(1024)
+                    if path.encode('utf-8') in data:
+                        ack_received = True
+                        break
+                except OSError:
+                    pass
+                await asyncio.sleep_ms(20)
+
+            if ack_received:
+                self.logger.log("OSC ACK sucsesfull recived: %s", path)
+                return True
+            else:
+                self.logger.log("OSC ACK Timeout fpr: %s (Try %d)", path, attempt + 1)
+                
+        self.logger.log("ERROR: OSC message for %s can not send after %d try.", path, max_retries)
+        return False
 
     # ---------------------------
     # event loop
@@ -208,8 +257,9 @@ class StateManager:
 
         self.logger.log("Auto-Clear executed: Setting opacity to 0.0")
         
-        self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0)
-        self._send_resolume_message(self._PARAM_PATH_CONNECT, 0)
+        # --- ANGEPASST: await hinzufügen ---
+        await self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0)
+        await self._send_resolume_message(self._PARAM_PATH_CONNECT, 0)
         
         if index != -1 and self._current_osc_index == index:
             self.update_state(index, "show")
@@ -260,11 +310,11 @@ class StateManager:
                 opacity_on = 1.0
                 connect_on = int(opacity_on)                
 
-                self._send_resolume_message(self._PARAM_PATH, message_text)
+                await self._send_resolume_message(self._PARAM_PATH, message_text)
                 await asyncio.sleep_ms(50)
-                self._send_resolume_message(self._PARAM_PATH_OPACITY, opacity_on)
+                await self._send_resolume_message(self._PARAM_PATH_OPACITY, opacity_on)
                 await asyncio.sleep_ms(50)
-                self._send_resolume_message(self._PARAM_PATH_CONNECT, connect_on)
+                await self._send_resolume_message(self._PARAM_PATH_CONNECT, connect_on)
                 self._current_osc_index = self._current_display_message_index
             
             self._active_resolume_task_id += 1
@@ -283,9 +333,13 @@ class StateManager:
         
         self.logger.log("OSC Sending: Text cleared (Path: %s)", self._PARAM_PATH)
         self.logger.log("OSC Sending: Opacity OFF (0.0) (Path: %s)", self._PARAM_PATH_OPACITY)
-        self._send_resolume_message(self._PARAM_PATH, "")
-        self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0)
-        self._send_resolume_message(self._PARAM_PATH_CONNECT, 0)
+        
+        # --- ANGEPASST: await hinzufügen ---
+        await self._send_resolume_message(self._PARAM_PATH, " ")
+        await asyncio.sleep_ms(50)
+        await self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0)
+        await asyncio.sleep_ms(50)
+        await self._send_resolume_message(self._PARAM_PATH_CONNECT, 0)
         
         if self._current_osc_index != -1 and self._current_display_message_index == -1:
             self.update_state(self._current_osc_index, "show")
@@ -350,7 +404,6 @@ class StateManager:
         self._messages.append(entry)
         if len(self._messages) > 6:
             self._messages.pop(0)
-        self._current_display_message_index = len(self._messages) - 1
         self._current_display_message_index = len(self._messages) - 1
         self._messages_dirty.set()
 

@@ -49,12 +49,6 @@ class StateManager:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._resolume_addr = (_RESOLUME_IP, _RESOLUME_PORT)
 
-        # Recive socket
-        self._recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._recv_sock.bind(('0.0.0.0', 7001))
-        self._recv_sock.setblocking(False)
-
         self._ensure_message_file()
         self._load_messages_from_file()
 
@@ -154,7 +148,6 @@ class StateManager:
             raise ValueError("Unsupported OSC argument type: %s" % type(arg))
         return msg
 
-    # --- ÜBERARBEITET: Asynchron + Retry Logic ---
     async def _send_resolume_message(self, path: str, value):
         try:
             if path == self._PARAM_PATH_OPACITY:
@@ -163,52 +156,16 @@ class StateManager:
                 value = int(value)
                 
             msg = self._osc_build_message(path, value)
-        except ValueError as ve:
-            self.logger.log("OSC encoding error: %s", ve)
-            return False
-        except Exception as e:
-            self.logger.log_exception("_send_resolume_message Encoding", e)
-            return False
-
-        max_retries = 3
-        timeout_ms = 500
-
-        for attempt in range(max_retries):
-            while True:
-                try:
-                    self._recv_sock.recv(1024)
-                except OSError:
-                    break
-
-            # send
-            try:
-                self._sock.sendto(msg, self._resolume_addr)
-                self.logger.log("OSC gesendet (Versuch %d/3): %s -> %s", attempt + 1, path, value)
-            except Exception as e:
-                self.logger.log_exception("_send_resolume_message Senden", e)
-
-            # wait for ACK
-            start_time = time.ticks_ms()
-            ack_received = False
             
-            while time.ticks_diff(time.ticks_ms(), start_time) < timeout_ms:
-                try:
-                    data, addr = self._recv_sock.recvfrom(1024)
-                    if path.encode('utf-8') in data:
-                        ack_received = True
-                        break
-                except OSError:
-                    pass
-                await asyncio.sleep_ms(20)
-
-            if ack_received:
-                self.logger.log("OSC ACK sucsesfull recived: %s", path)
-                return True
-            else:
-                self.logger.log("OSC ACK Timeout fpr: %s (Try %d)", path, attempt + 1)
-                
-        self.logger.log("ERROR: OSC message for %s can not send after %d try.", path, max_retries)
-        return False
+            self._sock.sendto(msg, self._resolume_addr)
+            await asyncio.sleep_ms(10)
+            self._sock.sendto(msg, self._resolume_addr)
+            
+            self.logger.log("OSC doppelt gesendet: %s -> %s", path, value)
+            return True
+        except Exception as e:
+            self.logger.log_exception("_send_resolume_message", e)
+            return False
 
     # ---------------------------
     # event loop
@@ -219,7 +176,6 @@ class StateManager:
         self.logger.log("Event Loop started.")
         
         while True:
-            self.logger.log("Waiting for next event from queue...")
             event = await self._event_queue.get()
             event_type = event.get("type", "UNKNOWN_TYPE")
             event_value = event.get("value", "UNKNOWN_VALUE")
@@ -243,7 +199,7 @@ class StateManager:
                 else:
                     self.logger.log("Unknown event type received: %s", event_type)
             except Exception as e:
-                self.logger.log_exception("Handler for %s", e)
+                self.logger.log_exception("Handler error", e)
                 
     # ---------------------------
     # Auto-Clear Task
@@ -252,20 +208,17 @@ class StateManager:
         await asyncio.sleep(45)
 
         if task_id != self._active_resolume_task_id:
-            self.logger.log("Auto-Clear aborted: Newer task (%d) active.", self._active_resolume_task_id)
+            self.logger.log("Auto-Clear aborted: Newer task active.")
             return
 
         self.logger.log("Auto-Clear executed: Setting opacity to 0.0")
         
-        # --- ANGEPASST: await hinzufügen ---
         await self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0)
         await self._send_resolume_message(self._PARAM_PATH_CONNECT, 0)
         
         if index != -1 and self._current_osc_index == index:
             self.update_state(index, "show")
             self._current_osc_index = -1
-        else:
-            self.logger.log("Auto-Clear: Index mismatch or already cleared.")
             
         self.logger.log("OSC Auto-Clear completed.")
 
@@ -280,7 +233,7 @@ class StateManager:
             self.logger.log("State update idx %d: %s", index, new_state)
             self._messages_dirty.set()
         else:
-            self.logger.log("Warning: Invalid index %d for messages list update.", index)
+            self.logger.log("Warning: Invalid index %d", index)
 
     # ---------------------------
     # event handlers
@@ -293,9 +246,6 @@ class StateManager:
         
         if self._current_display_message_index != -1:
             msg_entry = self._messages[self._current_display_message_index]
-            
-            self.logger.log("Message accepted: Type=%s, Value='%s' (Index: %d)", msg_entry['type'], msg_entry['value'], self._current_display_message_index)
-            
             self.update_state(self._current_display_message_index, "accepted")
 
             message_text = ""
@@ -307,34 +257,23 @@ class StateManager:
                 message_text = "Ersthelfer / medizinisches Fachpersonal bitte zum Kids Check-In"
 
             if message_text:
-                opacity_on = 1.0
-                connect_on = int(opacity_on)                
-
                 await self._send_resolume_message(self._PARAM_PATH, message_text)
                 await asyncio.sleep_ms(50)
-                await self._send_resolume_message(self._PARAM_PATH_OPACITY, opacity_on)
+                await self._send_resolume_message(self._PARAM_PATH_OPACITY, 1.0)
                 await asyncio.sleep_ms(50)
-                await self._send_resolume_message(self._PARAM_PATH_CONNECT, connect_on)
+                await self._send_resolume_message(self._PARAM_PATH_CONNECT, 1)
                 self._current_osc_index = self._current_display_message_index
             
             self._active_resolume_task_id += 1
-            current_task_id = self._active_resolume_task_id
-
-            asyncio.create_task(self._auto_clear_task(self._current_display_message_index, current_task_id))
+            asyncio.create_task(self._auto_clear_task(self._current_display_message_index, self._active_resolume_task_id))
 
             await self._display_event_queue.put({"type": "DELETETEXT", "value": ""})
             self._current_display_message_index = -1
             await self._led_event_queue.put({"state": "OFF"})
-        else:
-            self.logger.log("REJECT skipped: No message currently selected for ACCEPT.")
 
     async def _handle_reject(self):
-        self.logger.log("Handling REJECT: Message rejected, Resolume display cleared.")
+        self.logger.log("Handling REJECT")
         
-        self.logger.log("OSC Sending: Text cleared (Path: %s)", self._PARAM_PATH)
-        self.logger.log("OSC Sending: Opacity OFF (0.0) (Path: %s)", self._PARAM_PATH_OPACITY)
-        
-        # --- ANGEPASST: await hinzufügen ---
         await self._send_resolume_message(self._PARAM_PATH, " ")
         await asyncio.sleep_ms(50)
         await self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0)
@@ -346,16 +285,10 @@ class StateManager:
             self._current_osc_index = -1
         
         if self._current_display_message_index != -1:
-            msg_entry = self._messages[self._current_display_message_index]
-            
-            self.logger.log("Message rejected: Type=%s, Value='%s' (Index: %d)", msg_entry['type'], msg_entry['value'], self._current_display_message_index)
-            
             self.update_state(self._current_display_message_index, "rejected")
             await self._display_event_queue.put({"type": "DELETETEXT", "value": ""})
             self._current_display_message_index = -1
             await self._led_event_queue.put({"state": "OFF"})
-        else:
-            self.logger.log("REJECT skipped: No message currently selected for REJECT.")
 
     async def _handle_pickup(self, pickup_value):
         entry = {
@@ -370,10 +303,7 @@ class StateManager:
         self._current_display_message_index = len(self._messages) - 1
         self._messages_dirty.set()
 
-        self.logger.log("New message added: Type=PICKUP, Value='%s', Index=%d", pickup_value, self._current_display_message_index)
-
-        message_text = "Kind abholen: %s" % pickup_value
-        await self._display_event_queue.put({"type": "NEWTEXT", "value": message_text})
+        await self._display_event_queue.put({"type": "NEWTEXT", "value": "Kind abholen: %s" % pickup_value})
         await self._led_event_queue.put({"state": "ON"})
 
     async def _handle_emergency(self):
@@ -388,8 +318,6 @@ class StateManager:
             self._messages.pop(0)
         self._current_display_message_index = len(self._messages) - 1
         self._messages_dirty.set()
-
-        self.logger.log("New message added: Type=EMERGENCY, Index=%d", self._current_display_message_index)
 
         await self._display_event_queue.put({"type": "NEWTEXT", "value": "Ersthelfer zum Check-In"})
         await self._led_event_queue.put({"state": "ON"})
@@ -407,8 +335,5 @@ class StateManager:
         self._current_display_message_index = len(self._messages) - 1
         self._messages_dirty.set()
 
-        self.logger.log("New message added: Type=PARKING, Value='%s', Index=%d", plate_value, self._current_display_message_index)
-
-        message_text = "Umparken: %s" % plate_value
-        await self._display_event_queue.put({"type": "NEWTEXT", "value": message_text})
+        await self._display_event_queue.put({"type": "NEWTEXT", "value": "Umparken: %s" % plate_value})
         await self._led_event_queue.put({"state": "ON"})

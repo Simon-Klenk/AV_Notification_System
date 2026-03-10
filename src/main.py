@@ -85,6 +85,8 @@ async def main(logger):
  
     if task_display_manager:
         tasks_to_gather.append(task_display_manager)
+
+    logger_ref.log("Start Application Version 1.0")
         
     try:
         # Wait until all main tasks are finished (should never happen)
@@ -94,8 +96,6 @@ async def main(logger):
         logger.log_exception("CRITICAL ERROR in one of the main tasks", e)
         print("CRITICAL ERROR in one of the main tasks:")
         sys.print_exception(e)
-
-    logger_ref.log("Start Application Version 1.0")
 
 if __name__ == "__main__":
     logger_ref = None

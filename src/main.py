@@ -95,6 +95,8 @@ async def main(logger):
         print("CRITICAL ERROR in one of the main tasks:")
         sys.print_exception(e)
 
+    logger_ref.log("Start Application Version 1.0")
+
 if __name__ == "__main__":
     logger_ref = None
     try:

@@ -11,7 +11,7 @@ import re
 import time
 
 try:
-    import orjson as json
+    import orjson as json  # type: ignore[import-not-found]
 except ImportError:
     import json
 
@@ -31,7 +31,7 @@ try:
                 None, partial(handler, *args, **kwargs))
         return ret
 except ImportError:  # pragma: no cover
-    def iscoroutine(coro):
+    def iscoroutine(coro):  # type: ignore[misc]
         return hasattr(coro, 'send') and hasattr(coro, 'throw')
 
     async def invoke_handler(handler, *args, **kwargs):
@@ -46,7 +46,7 @@ except ImportError:  # pragma: no cover
         return ret
 
 try:
-    from sys import print_exception
+    from sys import print_exception  # type: ignore[attr-defined]
 except ImportError:  # pragma: no cover
     import traceback
 
@@ -321,14 +321,17 @@ class Request:
 
     def __init__(self, app, client_addr, method, url, http_version, headers,
                  body=None, stream=None, sock=None, url_prefix='',
-                 subapp=None):
+                 subapp=None, scheme=None, route=None):
         #: The application instance to which this request belongs.
         self.app = app
         #: The address of the client, as a tuple (host, port).
         self.client_addr = client_addr
         #: The HTTP method of the request.
         self.method = method
-        #: The request URL, including the path and query string.
+        #: The scheme of the request, either `http` or `https`.
+        self.scheme = scheme or 'http'
+        #: The request URL, including the path and query string, but not the
+        #: scheme or the host, which is available in the ``Host`` header.
         self.url = url
         #: The URL prefix, if the endpoint comes from a mounted
         #: sub-application, or else ''.
@@ -336,6 +339,8 @@ class Request:
         #: The sub-application instance, or `None` if this isn't a mounted
         #: endpoint.
         self.subapp = subapp
+        #: The route function that handles this request.
+        self.route = route
         #: The path portion of the URL.
         self.path = url
         #: The query string portion of the URL.
@@ -379,7 +384,8 @@ class Request:
         self.after_request_handlers = []
 
     @staticmethod
-    async def create(app, client_reader, client_writer, client_addr):
+    async def create(app, client_reader, client_writer, client_addr,
+                     scheme=None):
         """Create a request object.
 
         :param app: The Microdot application instance.
@@ -388,6 +394,7 @@ class Request:
         :param client_writer: An output stream where the response data can be
                               written.
         :param client_addr: The address of the client, as a tuple.
+        :param scheme: The scheme of the request, either 'http' or 'https'.
 
         This method is a coroutine. It returns a newly created ``Request``
         object.
@@ -424,7 +431,7 @@ class Request:
 
         return Request(app, client_addr, method, url, http_version, headers,
                        body=body, stream=stream,
-                       sock=(client_reader, client_writer))
+                       sock=(client_reader, client_writer), scheme=scheme)
 
     def _parse_urlencoded(self, urlencoded):
         data = MultiDict()
@@ -571,7 +578,7 @@ class Response:
     #: written to the client. Used to exit WebSocket connections cleanly.
     already_handled = None
 
-    def __init__(self, body='', status_code=200, headers=None, reason=None):
+    def __init__(self, body=b'', status_code=200, headers=None, reason=None):
         if body is None and status_code == 200:
             body = ''
             status_code = 204
@@ -767,7 +774,7 @@ class Response:
 
         :param filename: The filename of the file.
         :param status_code: The 3xx status code to use for the redirect. The
-                            default is 302.
+                            default is 200.
         :param content_type: The ``Content-Type`` header to use in the
                              response. If omitted, it is generated
                              automatically from the file extension of the
@@ -949,6 +956,7 @@ class Microdot:
         self.after_error_request_handlers = []
         self.error_handlers = {}
         self.options_handler = self.default_options_handler
+        self.ssl = False
         self.debug = False
         self.server = None
 
@@ -1204,7 +1212,7 @@ class Microdot:
         raise HTTPException(status_code, reason)
 
     async def start_server(self, host='0.0.0.0', port=5000, debug=False,
-                           ssl=None):
+                           ssl=None, start_serving=True):
         """Start the Microdot web server as a coroutine. This coroutine does
         not normally return, as the server enters an endless listening loop.
         The :func:`shutdown` function provides a method for terminating the
@@ -1223,6 +1231,13 @@ class Microdot:
                       default is ``False``.
         :param ssl: An ``SSLContext`` instance or ``None`` if the server should
                     not use TLS. The default is ``None``.
+        :param start_serving: If ``True``, the server starts accepting
+                              connections immediately. When set to ``False``,
+                              this method returns a ``Server`` object. To
+                              accept connections, the
+                              ``Server.serve_forever()`` method should be
+                              called. The default is ``True``. A value of
+                              ``False`` is only supported in CPython.
 
         This method is a coroutine.
 
@@ -1242,6 +1257,7 @@ class Microdot:
 
             asyncio.run(main())
         """
+        self.ssl = ssl
         self.debug = debug
 
         async def serve(reader, writer):
@@ -1266,10 +1282,18 @@ class Microdot:
                 host=host, port=port))
 
         try:
-            self.server = await asyncio.start_server(serve, host, port,
-                                                     ssl=ssl)
+            self.server = await asyncio.start_server(
+                serve, host, port, ssl=ssl, start_serving=start_serving)
+            if not start_serving:
+                return self.server
         except TypeError:  # pragma: no cover
-            self.server = await asyncio.start_server(serve, host, port)
+            if not start_serving:
+                raise ValueError('start_serving must be True')
+            try:
+                self.server = await asyncio.start_server(serve, host, port,
+                                                         ssl=ssl)
+            except TypeError:  # pragma: no cover
+                self.server = await asyncio.start_server(serve, host, port)
 
         while True:
             try:
@@ -1422,6 +1446,8 @@ class Microdot:
                 try:
                     res = None
                     if callable(f):
+                        req.route = f
+
                         # invoke the before request handlers
                         for handler in self.get_request_handlers(
                                 req, 'before_request', False):
@@ -1533,7 +1559,7 @@ class Microdot:
         return res
 
 
-Response.already_handled = Response()
+Response.already_handled = Response()  # type: ignore[assignment]
 
 abort = Microdot.abort
 redirect = Response.redirect

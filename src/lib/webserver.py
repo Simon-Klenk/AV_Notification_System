@@ -5,12 +5,11 @@
 # the main application event queue. 
 # 
 # Author: Simon Klenk 2025 
-# License: MIT - See the LICENSE file in the project directory for the full license text. 
-import uasyncio as asyncio
+# License: MIT - See the LICENSE file in the project directory for the full license text.
+
 import network
 from microdot import Microdot, send_file, redirect, Response
 from async_logger import _log_file, _backup_log_file
-import os
 
 app = Microdot()
 Response.default_content_type = 'application/json'
@@ -23,13 +22,11 @@ class Webserver:
     Implements the Microdot web server to serve static HTML pages 
     and handle API endpoints for application control.
     """
-    def __init__(self, event_queue, state_manager, logger, base_dir="/html"): 
+    def __init__(self, event_queue, state_manager, base_dir="/html"): 
         self._base_dir = base_dir 
         self._event_queue = event_queue 
         self.page_files = self._create_page_files() 
         self.state_manager = state_manager
-        self.logger = logger # Store the logger instance
-        self.logger.log("Webserver initialized.")
 
     def _create_page_files(self): 
         """Defines the paths for the static HTML pages.""" 
@@ -51,14 +48,11 @@ class Webserver:
         """ 
         page = request.args.get('page', 'pickup') 
         file = self.page_files.get(page, self.page_files['pickup']) 
-        
-        self.logger.log(f"Serving page: {page} ({file})")
+    
 
         try: 
             return send_file(file, max_age=0) 
         except Exception as e:
-            # Log the exception if the file serving fails
-            self.logger.log_exception("Webserver.index", e)
             return "404 - File not found", 404 
 
     async def handle_post(self, request): 
@@ -69,14 +63,12 @@ class Webserver:
         msg_plate = form.get('plate_number')
 
         if msg_content:
-            self.logger.log(f"Received PICKUP request: {msg_content}")
             await self._event_queue.put({
                 "type": "PICKUP",
                 "value": msg_content,
             })
 
         elif msg_plate:
-            self.logger.log(f"Received PARKING request: {msg_plate}")
             await self._event_queue.put({
                 "type": "PARKING",
                 "value": msg_plate,
@@ -85,14 +77,10 @@ class Webserver:
         elif msg_emergency: 
             # Assuming 'staff' is the key for triggering the EMERGENCY event
             if msg_emergency.lower() == "staff":
-                self.logger.log("Received EMERGENCY request (Staff Assist)")
                 await self._event_queue.put({
                     "type": "EMERGENCY",
                 })
-            else:
-                self.logger.log(f"Received unknown EMERGENCY type: {msg_emergency}")
-        
-        self.logger.log(f"Redirecting after POST to /?page=status")
+
         # Redirect back to the status page after submission
         return redirect('/?page=status') 
 
@@ -100,7 +88,6 @@ class Webserver:
         """API endpoint to retrieve the last 5 messages for the status page.""" 
         # Assumes state_manager.get_all_messages() returns a list of messages
         msgs = self.state_manager.get_all_messages() 
-        self.logger.log(f"API: Serving {len(msgs[-5:])} messages.")
         return {'messages': msgs[-5:]}
 
     async def show_log(self, request):
@@ -110,7 +97,6 @@ class Webserver:
             
             Uses a generator function (log_streamer) to yield content line-by-line.
             """
-            self.logger.log("API: Streaming system logs.")
             
             async def log_streamer():
                 """Generator that yields log content in small chunks."""
@@ -130,10 +116,8 @@ class Webserver:
                             # Yield the line (must be bytes for HTTP response body)
                             yield line.encode('utf-8')
                 except OSError as e:
-                    self.logger.log(f"Log file not found or read error: {_log_file}")
                     yield "\n--- system.log: Not found ---\n".encode('utf-8')
                 except Exception as e:
-                    self.logger.log_exception("show_log (system.log)", e)
                     yield "\n--- system.log: CRITICAL READ ERROR ---\n".encode('utf-8')
 
                 # 2. Stream backup log (system.log.old)
@@ -149,10 +133,8 @@ class Webserver:
                                 break
                             yield line.encode('utf-8')
                 except OSError as e:
-                    self.logger.log(f"Backup log file not found or read error: {_backup_log_file}")
                     yield "\n--- system.log.old: Not found ---\n".encode('utf-8')
                 except Exception as e:
-                    self.logger.log_exception("show_log (system.log.old)", e)
                     yield "\n--- system.log.old: CRITICAL READ ERROR ---\n".encode('utf-8')
 
 
@@ -170,14 +152,11 @@ class Webserver:
         API endpoint to trigger a system update via the downloader module.
         This function is only called via POST (button click) as configured in run().
         """ 
-        self.logger.log("System update triggered. Writing flag and resetting.")
         
         # Write the update flag before the reset
-        try:
-            with open("update_flag", "w") as f:
-                f.write("1")
-        except Exception as e:
-            self.logger.log_exception("handle_update_trigger", e)
+        
+        with open("update_flag", "w") as f:
+            f.write("1")
             
         import machine
         import time
@@ -199,8 +178,5 @@ class Webserver:
         wlan = network.WLAN(network.STA_IF) 
         if wlan.isconnected(): 
             ip = wlan.ifconfig()[0] 
-            self.logger.log(f"📡 Webserver starting at http://{ip}")
             # Start the server to listen on port 80
-            await app.start_server(port=80, debug=False) 
-        else: 
-            self.logger.log("⚠️ WiFi not connected - Webserver not started.")
+            await app.start_server(port=80, debug=False)

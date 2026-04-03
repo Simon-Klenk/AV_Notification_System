@@ -9,7 +9,6 @@
 # License: MIT - See the LICENSE file in the project directory for the full license text.
 #
 from machine import Pin, I2C
-import uasyncio as asyncio
 import sh1106
 import writer 
 import spleen_32 
@@ -33,9 +32,8 @@ class DisplayInitializationError(Exception):
     pass
 
 class DisplayManager:
-    def __init__(self, display_event_queue, logger):
+    def __init__(self, display_event_queue):
         self._display_event_queue = display_event_queue 
-        self.logger = logger 
         
         self._current_text = ""
         self.display = None
@@ -55,7 +53,6 @@ class DisplayManager:
 
             devices = self.i2c.scan()
             if not devices or I2C_ADDR not in devices:
-                self.logger.log(f"I2C scan failed: {len(devices)} devices found. Expected: {hex(I2C_ADDR)}. Found: {[hex(d) for d in devices]}")
                 return
 
             self.display = sh1106.SH1106_I2C(
@@ -70,7 +67,7 @@ class DisplayManager:
             self.writer.col_clip = True 
 
         except Exception as e:
-            self.logger.log(f"Failed to initialize display: {e}")
+            pass
 
     # ---------------------------
     # text sanitization
@@ -111,30 +108,22 @@ class DisplayManager:
             self._core1_power_on = power_on
 
         if not self._core1_running:
-            self.logger.log("Starting Core 1 scroll thread.")
             _thread.start_new_thread(self._core1_scroll_thread, ())
 
     async def handle_event(self, event):
         """Processes NEWTEXT and DELETETEXT events."""
         event_type = event.get("type")
         event_value = event.get("value", "")
-        
-        self.logger.log(f"Display event received: {event_type} - '{event_value[:20]}...'")
 
         if event_type == "NEWTEXT":
             text = event_value
             if text != self._current_text:
                 self._current_text = text
-                self.logger.log(f"Display text updated: '{text}'")
                 self._update_text_and_power(text, True)
                 
         elif event_type == "DELETETEXT":
-            self.logger.log("Display text cleared.")
             self._update_text_and_power("", False) 
             self._current_text = ""
-            
-        else:
-            self.logger.log(f"Warning: Unknown display event type: {event_type}")
 
     # ---------------------------
     # calculate dimensions
@@ -147,7 +136,6 @@ class DisplayManager:
         try:
             text_width = self.writer.stringlen(text)
         except Exception as e:
-            self.logger.log_exception("_calculate_dims", e)
             text_width = DISPLAY_WIDTH # Fallback to prevent crash
 
         if text_width <= DISPLAY_WIDTH:
@@ -183,7 +171,6 @@ class DisplayManager:
                         self.display.poweroff()
                         self.display.fill(0)
                         self.display.show()
-                        self.logger.log("Core 1: Display powered off.")
                         _text = ""
                     
                     utime.sleep_ms(500) 
@@ -195,7 +182,6 @@ class DisplayManager:
                     _text = new_text
                     text_width, y_start, x_start, x_end = self._calculate_dims(_text)
                     current_x = float(x_start)
-                    self.logger.log(f"Core 1: New text set. Width={text_width}, Scroll needed={x_start != x_end}")
                     
                     if x_start == x_end:
                         self._render_text(_text, y_start, int(current_x))
@@ -217,7 +203,6 @@ class DisplayManager:
 
         except Exception as e:
             # Critical error in the dedicated core thread
-            self.logger.log_exception("_core1_scroll_thread CRITICAL EXIT", e)
             self._core1_running = False # Stop the thread loop
             try:
                 self.display.poweroff()
@@ -244,16 +229,13 @@ class DisplayManager:
             with self._core1_lock:
                 self.display.show()
         except Exception as e:
-            # Log render errors, but try to keep the core loop running if possible
-            self.logger.log_exception("_render_text", e)
-
+            pass
 
     # ---------------------------
     # run function
     # ---------------------------
     async def run(self):
         """Asynchronous task that processes events and controls the display."""
-        self.logger.log("DisplayManager run loop started.")
         while True:
             event = await self._display_event_queue.get()
             await self.handle_event(event)

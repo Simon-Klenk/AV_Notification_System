@@ -14,7 +14,6 @@ import os
 import usocket as socket
 import struct
 import gc
-import time
 
 _message_file = 'messages.txt'
 _RESOLUME_IP = '192.168.104.10'
@@ -30,7 +29,7 @@ class StateManager:
     _PARAM_PATH = "/composition/layers/6/clips/1/video/effects/textblock/effect/text/params/lines"
     _PARAM_PATH_CONNECT = "/composition/layers/6/clips/1/connect"
 
-    def __init__(self, event_queue, display_event_queue, led_event_queue, logger):
+    def __init__(self, event_queue, display_event_queue, led_event_queue):
         self._event_queue = event_queue
         self._display_event_queue = display_event_queue
         self._led_event_queue = led_event_queue
@@ -39,7 +38,6 @@ class StateManager:
         self._current_osc_index = -1
         self._messages_dirty = asyncio.Event()
         self.rtc = RTC()
-        self.logger = logger
 
         self._max_messages = 5
         self._messages = []
@@ -47,12 +45,11 @@ class StateManager:
 
         # Send socket
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setblocking(False)
         self._resolume_addr = (_RESOLUME_IP, _RESOLUME_PORT)
 
         self._ensure_message_file()
         self._load_messages_from_file()
-
-        self.logger.log("StateManager initialized.")
 
     def _current_timestamp(self):
         t = self.rtc.datetime()
@@ -64,21 +61,18 @@ class StateManager:
 
     def _ensure_message_file(self):
         if _message_file not in os.listdir():
-            self.logger.log("Creating missing message file: %s", _message_file)
             try:
                 with open(_message_file, "w") as f:
                     f.write("[]")
             except Exception as e:
-                self.logger.log_exception("_ensure_message_file", e)
+                pass
 
     def _load_messages_from_file(self):
         try:
             with open(_message_file, "r") as f:
                 data = f.read().strip()
                 self._messages = ujson.loads(data) if data else []
-            self.logger.log("Loaded %d messages from file.", len(self._messages))
         except Exception as e:
-            self.logger.log_exception("_load_messages_from_file", e)
             self._messages = []
         gc.collect()
 
@@ -92,18 +86,12 @@ class StateManager:
 
             if self._current_display_message_index != -1:
                 self._current_display_message_index = max(-1, self._current_display_message_index - removed_count)
-        
-        if removed_count > 0:
-            self.logger.log("Removed %d old messages to maintain limit.", removed_count)
             
         try:
             with open(_message_file, "w") as f:
                 f.write(ujson.dumps(self._messages))
-            self.logger.log("Wrote %d messages to file.", len(self._messages))
         except Exception as e:
-            self.logger.log_exception("_write_messages_to_file", e)
-        
-        gc.collect()
+            pass
 
     def get_all_messages(self):
         return list(self._messages)
@@ -116,8 +104,7 @@ class StateManager:
         while True:
             await self._messages_dirty.wait()
             self._messages_dirty.clear()
-            self.logger.log("Message file flagged dirty. Waiting 500ms before write...")
-            await asyncio.sleep_ms(500)
+            await asyncio.sleep(3)
             self._write_messages_to_file()
 
     # ---------------------------
@@ -144,11 +131,10 @@ class StateManager:
         elif isinstance(arg, str):
             msg += self._osc_encode_string(",s") + self._osc_encode_string(arg)
         else:
-            self.logger.log("Error: Unsupported OSC argument type: %s", type(arg))
             raise ValueError("Unsupported OSC argument type: %s" % type(arg))
         return msg
 
-    async def _send_resolume_message(self, path: str, value):
+    async def _send_resolume_message(self, path: str, value, retries=5):
         try:
             if path == self._PARAM_PATH_OPACITY:
                 value = float(value)
@@ -157,14 +143,23 @@ class StateManager:
                 
             msg = self._osc_build_message(path, value)
             
-            self._sock.sendto(msg, self._resolume_addr)
-            await asyncio.sleep_ms(10)
-            self._sock.sendto(msg, self._resolume_addr)
-            
-            self.logger.log("OSC doppelt gesendet: %s -> %s", path, value)
-            return True
+            for attempt in range(retries):
+                try:
+                    self._sock.sendto(msg, self._resolume_addr)
+                    return True
+                except OSError as e:
+                    # 11 = EAGAIN, 12 = ENOMEM
+                    if e.args[0] in (11, 12):
+                        await asyncio.sleep_ms(20 * (attempt + 1))
+                        continue
+                    else:
+                        print("OSC Send OSError: ", e)
+                        raise e
+                        
+            print("OSC Fehler: Konnte %s nach %d Versuchen nicht senden." % (path, retries))
+            return False
         except Exception as e:
-            self.logger.log_exception("_send_resolume_message", e)
+            print("OSC Kritischer Fehler bei %s: %s" % (path, e))
             return False
 
     # ---------------------------
@@ -173,14 +168,11 @@ class StateManager:
 
     async def run(self):
         asyncio.create_task(self._file_writer_task())
-        self.logger.log("Event Loop started.")
         
         while True:
             event = await self._event_queue.get()
             event_type = event.get("type", "UNKNOWN_TYPE")
             event_value = event.get("value", "UNKNOWN_VALUE")
-            
-            self.logger.log("Event received: %s - %s", event_type, event_value)
 
             try:
                 if event_type == "BUTTON_PRESSED":
@@ -188,18 +180,15 @@ class StateManager:
                         await self._handle_accept()
                     elif event_value == "REJECT":
                         await self._handle_reject()
-                    else:
-                        self.logger.log("Unknown BUTTON_PRESSED value: %s", event_value)
                 elif event_type == "PICKUP":
                     await self._handle_pickup(event_value)
                 elif event_type == "PARKING":
                     await self._handle_parking(event_value)
                 elif event_type == "EMERGENCY":
                     await self._handle_emergency()
-                else:
-                    self.logger.log("Unknown event type received: %s", event_type)
             except Exception as e:
-                self.logger.log_exception("Handler error", e)
+                print("Fehler im Event Loop: ", e)
+                pass
                 
     # ---------------------------
     # Auto-Clear Task
@@ -208,19 +197,23 @@ class StateManager:
         await asyncio.sleep(45)
 
         if task_id != self._active_resolume_task_id:
-            self.logger.log("Auto-Clear aborted: Newer task active.")
             return
-
-        self.logger.log("Auto-Clear executed: Setting opacity to 0.0")
         
+        # Burst 1
         await self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0)
+        await asyncio.sleep_ms(42)
+        await self._send_resolume_message(self._PARAM_PATH_CONNECT, 0)
+        await asyncio.sleep_ms(150)
+        
+        # Burst 2
+        await self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0)
+        await asyncio.sleep_ms(42)
         await self._send_resolume_message(self._PARAM_PATH_CONNECT, 0)
         
         if index != -1 and self._current_osc_index == index:
             self.update_state(index, "show")
             self._current_osc_index = -1
-            
-        self.logger.log("OSC Auto-Clear completed.")
+
 
 
     # ---------------------------
@@ -230,17 +223,13 @@ class StateManager:
     def update_state(self, index, new_state):
         if index != -1 and index <= len(self._messages) - 1:
             self._messages[index]["state"] = new_state
-            self.logger.log("State update idx %d: %s", index, new_state)
             self._messages_dirty.set()
-        else:
-            self.logger.log("Warning: Invalid index %d", index)
 
     # ---------------------------
     # event handlers
     # ---------------------------
 
     async def _handle_accept(self):
-        self.logger.log("Pressed accept")
         if self._current_osc_index != -1:
             self.update_state(self._current_osc_index, "show")
         
@@ -254,14 +243,32 @@ class StateManager:
             elif msg_entry['type'] == "PARKING":
                 message_text = "Fahrzeug bitte umparken:\n%s" % msg_entry['value']
             elif msg_entry['type'] == "EMERGENCY":
-                message_text = "Ersthelfer / medizinisches Fachpersonal bitte zum Kids Check-In"
+                message_text = "Ersthelfer bitte zum Kids Check-In!"
 
             if message_text:
+                # Burst 1
                 await self._send_resolume_message(self._PARAM_PATH, message_text)
-                await asyncio.sleep_ms(50)
+                await asyncio.sleep_ms(42)
                 await self._send_resolume_message(self._PARAM_PATH_OPACITY, 1.0)
-                await asyncio.sleep_ms(50)
+                await asyncio.sleep_ms(42)
                 await self._send_resolume_message(self._PARAM_PATH_CONNECT, 1)
+                await asyncio.sleep_ms(150)
+
+                # Burst 2
+                await self._send_resolume_message(self._PARAM_PATH, message_text)
+                await asyncio.sleep_ms(42)
+                await self._send_resolume_message(self._PARAM_PATH_OPACITY, 1.0)
+                await asyncio.sleep_ms(42)
+                await self._send_resolume_message(self._PARAM_PATH_CONNECT, 1)
+                await asyncio.sleep_ms(250)
+
+                # Burst 3
+                await self._send_resolume_message(self._PARAM_PATH, message_text)
+                await asyncio.sleep_ms(42)
+                await self._send_resolume_message(self._PARAM_PATH_OPACITY, 1.0)
+                await asyncio.sleep_ms(42)
+                await self._send_resolume_message(self._PARAM_PATH_CONNECT, 1)
+
                 self._current_osc_index = self._current_display_message_index
             
             self._active_resolume_task_id += 1
@@ -272,12 +279,13 @@ class StateManager:
             await self._led_event_queue.put({"state": "OFF"})
 
     async def _handle_reject(self):
-        self.logger.log("Handling REJECT")
         
         await self._send_resolume_message(self._PARAM_PATH, " ")
-        await asyncio.sleep_ms(50)
+        await asyncio.sleep_ms(53)
         await self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0)
-        await asyncio.sleep_ms(50)
+        await asyncio.sleep_ms(53)
+        await self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0) 
+        await asyncio.sleep_ms(53)
         await self._send_resolume_message(self._PARAM_PATH_CONNECT, 0)
         
         if self._current_osc_index != -1 and self._current_display_message_index == -1:
@@ -303,13 +311,13 @@ class StateManager:
         self._current_display_message_index = len(self._messages) - 1
         self._messages_dirty.set()
 
-        await self._display_event_queue.put({"type": "NEWTEXT", "value": "Kind abholen: %s" % pickup_value})
+        await self._display_event_queue.put({"type": "NEWTEXT", "value": "%s abholen" % pickup_value})
         await self._led_event_queue.put({"state": "ON"})
 
     async def _handle_emergency(self):
         entry = {
             "type": "EMERGENCY",
-            "value": "Ersthelfer / medizinisches Fachpersonal bitte zum Kids Check-In",
+            "value": "Ersthelfer bitte zum Kids Check-In!",
             "state": "wait",
             "timestamp": self._current_timestamp()
         }
@@ -319,7 +327,7 @@ class StateManager:
         self._current_display_message_index = len(self._messages) - 1
         self._messages_dirty.set()
 
-        await self._display_event_queue.put({"type": "NEWTEXT", "value": "Ersthelfer zum Check-In"})
+        await self._display_event_queue.put({"type": "NEWTEXT", "value": "Ersthelfer"})
         await self._led_event_queue.put({"state": "ON"})
     
     async def _handle_parking(self, plate_value):
@@ -335,5 +343,5 @@ class StateManager:
         self._current_display_message_index = len(self._messages) - 1
         self._messages_dirty.set()
 
-        await self._display_event_queue.put({"type": "NEWTEXT", "value": "Umparken: %s" % plate_value})
+        await self._display_event_queue.put({"type": "NEWTEXT", "value": "Fzg: %s" % plate_value})
         await self._led_event_queue.put({"state": "ON"})

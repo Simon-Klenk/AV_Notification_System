@@ -24,7 +24,7 @@ I2C_ADDR = 0x3c
 SDA_PIN = 16
 SCL_PIN = 17
 SCROLL_SPEED = 3
-SCROLL_DELAY_MS = 1
+SCROLL_DELAY_MS = 20
 # ---------------------------
 
 class DisplayInitializationError(Exception):

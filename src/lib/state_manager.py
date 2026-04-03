@@ -43,7 +43,6 @@ class StateManager:
         self._messages = []
         self._active_resolume_task_id = 0
 
-        # Send socket
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setblocking(False)
         self._resolume_addr = (_RESOLUME_IP, _RESOLUME_PORT)
@@ -106,6 +105,7 @@ class StateManager:
             self._messages_dirty.clear()
             await asyncio.sleep(3)
             self._write_messages_to_file()
+            gc.collect()
 
     # ---------------------------
     # OSC helpers
@@ -122,6 +122,9 @@ class StateManager:
     def _osc_encode_int(self, i: int) -> bytes:
         return struct.pack('>i', i)
 
+    def _osc_encode_timetag(self) -> bytes:
+        return struct.pack('>II', 0, 1)
+
     def _osc_build_message(self, address: str, arg) -> bytes:
         msg = self._osc_encode_string(address)
         if isinstance(arg, int):
@@ -134,32 +137,32 @@ class StateManager:
             raise ValueError("Unsupported OSC argument type: %s" % type(arg))
         return msg
 
-    async def _send_resolume_message(self, path: str, value, retries=5):
+    def _osc_build_bundle(self, messages_args_list) -> bytes:
+        bundle = self._osc_encode_string("#bundle")
+        bundle += self._osc_encode_timetag()
+        for path, arg in messages_args_list:
+            msg = self._osc_build_message(path, arg)
+            bundle += struct.pack('>i', len(msg))
+            bundle += msg
+        return bundle
+
+    async def _send_resolume_bundle(self, message_list, retries=5):
         try:
-            if path == self._PARAM_PATH_OPACITY:
-                value = float(value)
-            elif path == self._PARAM_PATH_CONNECT:
-                value = int(value)
-                
-            msg = self._osc_build_message(path, value)
-            
+            msg_packet = self._osc_build_bundle(message_list)
             for attempt in range(retries):
                 try:
-                    self._sock.sendto(msg, self._resolume_addr)
+                    self._sock.sendto(msg_packet, self._resolume_addr)
                     return True
                 except OSError as e:
-                    # 11 = EAGAIN, 12 = ENOMEM
                     if e.args[0] in (11, 12):
                         await asyncio.sleep_ms(20 * (attempt + 1))
                         continue
                     else:
                         print("OSC Send OSError: ", e)
                         raise e
-                        
-            print("OSC Fehler: Konnte %s nach %d Versuchen nicht senden." % (path, retries))
             return False
         except Exception as e:
-            print("OSC Kritischer Fehler bei %s: %s" % (path, e))
+            print("OSC Kritischer Fehler: %s" % e)
             return False
 
     # ---------------------------
@@ -194,27 +197,24 @@ class StateManager:
     # Auto-Clear Task
     # ---------------------------
     async def _auto_clear_task(self, index, task_id):
-        await asyncio.sleep(45)
+        await asyncio.sleep(30)
 
         if task_id != self._active_resolume_task_id:
             return
         
-        # Burst 1
-        await self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0)
-        await asyncio.sleep_ms(42)
-        await self._send_resolume_message(self._PARAM_PATH_CONNECT, 0)
-        await asyncio.sleep_ms(150)
-        
-        # Burst 2
-        await self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0)
-        await asyncio.sleep_ms(42)
-        await self._send_resolume_message(self._PARAM_PATH_CONNECT, 0)
+        bundle = [
+            (self._PARAM_PATH_OPACITY, 0.0),
+            (self._PARAM_PATH_CONNECT, 0)
+        ]
+
+        await asyncio.sleep_ms(0)
+        await self._send_resolume_bundle(bundle)
+        await asyncio.sleep_ms(700)
+        await self._send_resolume_bundle(bundle)
         
         if index != -1 and self._current_osc_index == index:
             self.update_state(index, "show")
             self._current_osc_index = -1
-
-
 
     # ---------------------------
     # state update
@@ -246,28 +246,17 @@ class StateManager:
                 message_text = "Ersthelfer bitte zum Kids Check-In!"
 
             if message_text:
-                # Burst 1
-                await self._send_resolume_message(self._PARAM_PATH, message_text)
-                await asyncio.sleep_ms(42)
-                await self._send_resolume_message(self._PARAM_PATH_OPACITY, 1.0)
-                await asyncio.sleep_ms(42)
-                await self._send_resolume_message(self._PARAM_PATH_CONNECT, 1)
-                await asyncio.sleep_ms(150)
-
-                # Burst 2
-                await self._send_resolume_message(self._PARAM_PATH, message_text)
-                await asyncio.sleep_ms(42)
-                await self._send_resolume_message(self._PARAM_PATH_OPACITY, 1.0)
-                await asyncio.sleep_ms(42)
-                await self._send_resolume_message(self._PARAM_PATH_CONNECT, 1)
-                await asyncio.sleep_ms(250)
-
-                # Burst 3
-                await self._send_resolume_message(self._PARAM_PATH, message_text)
-                await asyncio.sleep_ms(42)
-                await self._send_resolume_message(self._PARAM_PATH_OPACITY, 1.0)
-                await asyncio.sleep_ms(42)
-                await self._send_resolume_message(self._PARAM_PATH_CONNECT, 1)
+                bundle = [
+                    (self._PARAM_PATH, message_text),
+                    (self._PARAM_PATH_OPACITY, 1.0),
+                    (self._PARAM_PATH_CONNECT, 1)
+                ]
+                await asyncio.sleep_ms(0)
+                await self._send_resolume_bundle(bundle)
+                await asyncio.sleep_ms(350)
+                await self._send_resolume_bundle(bundle)
+                await asyncio.sleep_ms(700)
+                await self._send_resolume_bundle(bundle)
 
                 self._current_osc_index = self._current_display_message_index
             
@@ -279,14 +268,15 @@ class StateManager:
             await self._led_event_queue.put({"state": "OFF"})
 
     async def _handle_reject(self):
-        
-        await self._send_resolume_message(self._PARAM_PATH, " ")
-        await asyncio.sleep_ms(53)
-        await self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0)
-        await asyncio.sleep_ms(53)
-        await self._send_resolume_message(self._PARAM_PATH_OPACITY, 0.0) 
-        await asyncio.sleep_ms(53)
-        await self._send_resolume_message(self._PARAM_PATH_CONNECT, 0)
+        bundle = [
+            (self._PARAM_PATH, " "),
+            (self._PARAM_PATH_OPACITY, 0.0),
+            (self._PARAM_PATH_CONNECT, 0)
+        ]
+        await asyncio.sleep_ms(0)
+        await self._send_resolume_bundle(bundle)
+        await asyncio.sleep_ms(350)
+        await self._send_resolume_bundle(bundle)
         
         if self._current_osc_index != -1 and self._current_display_message_index == -1:
             self.update_state(self._current_osc_index, "show")

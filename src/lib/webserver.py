@@ -153,8 +153,6 @@ class Webserver:
         This function is only called via POST (button click) as configured in run().
         """ 
         
-        # Write the update flag before the reset
-        
         with open("update_flag", "w") as f:
             f.write("1")
             
@@ -162,6 +160,18 @@ class Webserver:
         import time
         time.sleep(0.5)
         machine.reset()
+    
+    async def handle_simulation(self, request):
+        action = request.args.get('action')
+        
+        if action in ["ACCEPT", "REJECT"]:
+            await self._event_queue.put({
+                "type": "BUTTON_PRESSED",
+                "value": action
+            })
+            return {"status": "success", "simulated": action}, 200
+        
+        return {"status": "error", "message": "Invalid action"}, 400
 
     # --------------------------- 
     # main loop 
@@ -174,6 +184,7 @@ class Webserver:
         app.route('/messages')(self.show_messages)
         app.route('/log')(self.show_log)
         app.route('/system', methods=['POST'])(self.handle_update_trigger)
+        app.route('/simulate', methods=['POST'])(self.handle_simulation)
 
         wlan = network.WLAN(network.STA_IF) 
         if wlan.isconnected(): 

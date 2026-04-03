@@ -102,9 +102,9 @@ class StateManager:
     async def _file_writer_task(self):
         while True:
             await self._messages_dirty.wait()
-            self._messages_dirty.clear()
-            await asyncio.sleep(3)
+            await asyncio.sleep(15)
             self._write_messages_to_file()
+            self._messages_dirty.clear()
             gc.collect()
 
     # ---------------------------

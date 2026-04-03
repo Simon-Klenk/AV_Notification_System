@@ -57,4 +57,5 @@ def connect_wifi():
         return None
 
     ip = wlan.ifconfig()[0]
+    print(ip)
     return ip

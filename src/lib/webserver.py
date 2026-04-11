@@ -149,16 +149,27 @@ class Webserver:
     
     async def handle_update_trigger(self, request): 
         """
-        API endpoint to trigger a system update via the downloader module.
-        This function is only called via POST (button click) as configured in run().
+        API endpoint to trigger a system update.
+        Sets the flag and schedules a reset.
         """ 
-        
-        with open("update_flag", "w") as f:
-            f.write("1")
+        try:
+            with open("update_flag", "w") as f:
+                f.write("1")
             
+            import uasyncio as asyncio
+            asyncio.create_task(self._delayed_reset(2))
+            
+            return {"status": "success", "message": "Rebooting into update mode..."}, 200
+            
+        except Exception as e:
+            return {"status": "error", "message": str(e)}, 500
+
+    async def _delayed_reset(self, delay):
+        """Hilfsfunktion für den verzögerten Neustart."""
+        import uasyncio as asyncio
         import machine
-        import time
-        time.sleep(0.5)
+        await asyncio.sleep(delay)
+        print("System wird für Update neu gestartet...")
         machine.reset()
     
     async def handle_simulation(self, request):
@@ -189,5 +200,4 @@ class Webserver:
         wlan = network.WLAN(network.STA_IF) 
         if wlan.isconnected(): 
             ip = wlan.ifconfig()[0] 
-            # Start the server to listen on port 80
             await app.start_server(port=80, debug=False)
